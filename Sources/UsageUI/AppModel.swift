@@ -67,6 +67,8 @@ public final class AppModel {
     public private(set) var live: [String: LiveProcess] = [:]
     public private(set) var collectorSnapshot = CollectorSnapshot()
     public private(set) var hasLoaded = false
+    /// True when macOS is not showing the menu bar icon, so the app offers a Dock icon instead.
+    public private(set) var menuBarIconHidden = false
     public private(set) var lastError: String?
     public private(set) var openReport: DatabaseOpenReport
     /// Increases whenever stored data may have changed, so that open pages know to reload.
@@ -152,6 +154,27 @@ public final class AppModel {
             while !Task.isCancelled {
                 await self?.applyRetention()
                 try? await Task.sleep(for: .seconds(24 * 3600), tolerance: .seconds(3600))
+            }
+        })
+        DockPresence.persistent = settings.showDockIcon
+        tasks.append(Task { [weak self] in
+            // Give macOS time to place the status item, then check periodically, because the menu bar's
+            // free space changes as other apps come and go.
+            try? await Task.sleep(for: .seconds(3))
+            var previousHidden = false
+            while !Task.isCancelled {
+                if let hidden = StatusItemProbe.isHidden(), let self {
+                    // The icon counts as hidden only after two readings in a row, so that a brief
+                    // occlusion (a screen waking up, say) does not flip the Dock icon on and off.
+                    let confirmedHidden = hidden && previousHidden
+                    previousHidden = hidden
+                    if (!hidden || confirmedHidden), self.menuBarIconHidden != confirmedHidden {
+                        self.menuBarIconHidden = confirmedHidden
+                        DockPresence.persistent = self.settings.showDockIcon || confirmedHidden
+                    }
+                }
+                // Check again soon while the icon looks hidden, and rarely once it is visible.
+                try? await Task.sleep(for: .seconds(previousHidden ? 5 : 300), tolerance: .seconds(2))
             }
         })
         requestRefresh()
@@ -326,6 +349,7 @@ public final class AppModel {
             Task { await quota.refresh(force: true) }
         }
         if before.retentionDays != settings.retentionDays { Task { await applyRetention() } }
+        if before.showDockIcon != settings.showDockIcon { DockPresence.persistent = settings.showDockIcon || menuBarIconHidden }
         if before.disabledSources != settings.disabledSources { Task { await collector.reconcileNow(reason: "sources-changed") } }
         requestRefresh()
     }
@@ -445,19 +469,41 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Dock presence
 
-/// The app lives in the menu bar and has no Dock icon, except while one of its windows is open, when it
-/// behaves like an ordinary app so that the window can take focus and appear in the app switcher.
+/// The app lives in the menu bar and has no Dock icon, except in two situations. While one of its windows
+/// is open it behaves like an ordinary app, so that the window can take focus. It also keeps a Dock icon
+/// when the user asks for one, or when macOS has hidden its menu bar icon (which happens when the menu
+/// bar is full and the new item lands under the notch), because the app would otherwise be unreachable.
 @MainActor
 enum DockPresence {
+    /// True when the Dock icon should stay regardless of windows.
+    static var persistent = false {
+        didSet { if persistent != oldValue { apply() } }
+    }
+
     static func windowAppeared() {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    static func windowDisappeared() {
+    static func windowDisappeared() { apply() }
+
+    /// Chooses the activation policy from the current windows and the persistent flag.
+    static func apply() {
         // The window that is closing is already hidden by the time this runs.
         let hasWindow = NSApplication.shared.windows.contains { $0.isVisible && $0.canBecomeMain }
-        if !hasWindow { NSApplication.shared.setActivationPolicy(.accessory) }
+        NSApplication.shared.setActivationPolicy(persistent || hasWindow ? .regular : .accessory)
+    }
+}
+
+/// Works out whether macOS is actually showing the app's menu bar icon.
+@MainActor
+enum StatusItemProbe {
+    /// Returns nil when the status item window does not exist yet, true when it exists but no part of it is
+    /// visible (for example because it sits under the notch), and false when it is visible.
+    static func isHidden() -> Bool? {
+        let windows = NSApplication.shared.windows.filter { NSStringFromClass(type(of: $0)).contains("StatusBar") }
+        guard !windows.isEmpty else { return nil }
+        return windows.allSatisfy { !$0.occlusionState.contains(.visible) }
     }
 }
 

@@ -36,6 +36,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var menuBarMode: MenuBarDisplayMode = .both
     public var appearance: AppearanceMode = .system
     public var showEstimatedCost = true
+    /// Whether the app keeps a Dock icon even when its menu bar icon is visible.
+    public var showDockIcon = false
     /// Days of history to keep. Zero keeps everything.
     public var retentionDays = 0
     public var notifications = NotificationSettings()

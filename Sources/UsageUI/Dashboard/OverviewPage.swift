@@ -56,6 +56,7 @@ struct OverviewPage: View {
     var body: some View {
         let o = model.overview
         PageScroll {
+            if model.menuBarIconHidden { hiddenIconNotice }
             if let banner = importBanner { banner }
             if o.allTime.requests == 0 && model.hasLoaded {
                 NoDataNotice()
@@ -144,6 +145,16 @@ struct OverviewPage: View {
             }
         }
         .task(id: model.dataVersion) { await load() }
+    }
+
+    private var hiddenIconNotice: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 4) {
+                Label("macOS is hiding the menu bar icon", systemImage: "menubar.rectangle").font(.headline)
+                Text("The menu bar has no room left, so the icon sits under the notch. The app is available from the Dock for now. To get the icon back, quit or hide a few other menu bar items, or hold ⌘ and drag icons to rearrange them.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var importBanner: (some View)? {

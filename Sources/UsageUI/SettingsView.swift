@@ -45,6 +45,15 @@ private struct GeneralSettings: View {
                 if let loginError { Text(loginError).font(.caption).foregroundStyle(Palette.critical) }
                 Text("The app keeps collecting usage in the menu bar even when no window is open.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Dock") {
+                Toggle("Show in the Dock", isOn: Binding(get: { model.settings.showDockIcon }, set: { v in model.updateSettings { $0.showDockIcon = v } }))
+                if model.menuBarIconHidden {
+                    Label("macOS is hiding the menu bar icon because the menu bar is full, so the app is shown in the Dock for now.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(Palette.warning)
+                }
+                Text("Normally the app lives only in the menu bar. A Dock icon gives you another way in, and clicking it opens the dashboard.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Menu bar") {
                 Picker("Show", selection: Binding(get: { model.settings.menuBarMode }, set: { v in model.updateSettings { $0.menuBarMode = v } })) {
                     ForEach(MenuBarDisplayMode.allCases) { Text($0.label).tag($0) }

@@ -6,6 +6,8 @@ import UsageCore
 public struct DashboardView: View {
     @Environment(AppModel.self) private var model
 
+    @Environment(\.openWindow) private var openWindow
+
     public init() {}
 
     public var body: some View {
@@ -33,6 +35,10 @@ public struct DashboardView: View {
         }
         .frame(minWidth: 980, minHeight: 640)
         .toolbar {
+            ToolbarItem {
+                Button { openWindow(id: "settings") } label: { Label("Settings", systemImage: "gearshape") }
+                    .help("Open Settings (⌘,)")
+            }
             ToolbarItem {
                 Button { model.refreshNow() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     .help("Check for new usage now").keyboardShortcut("r")

@@ -36,5 +36,17 @@ struct ClaudeUsageMonitorApp: App {
             if let model { SettingsView().environment(model) }
         }
         .windowResizability(.contentSize)
+        .commands {
+            // Gives the Settings window its usual place in the app menu and its standard shortcut.
+            CommandGroup(replacing: .appSettings) { SettingsCommand() }
+        }
+    }
+}
+
+/// The "Settings…" menu item.
+struct SettingsCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Settings…") { openWindow(id: "settings") }.keyboardShortcut(",")
     }
 }

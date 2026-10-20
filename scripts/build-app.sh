@@ -24,6 +24,9 @@ swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product ccu-statusl
 BIN_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "==> Assembling $APP"
+mkdir -p "$BUILD_DIR"
+# Keeps Spotlight from listing this build output as a second copy of the app next to the installed one.
+touch "$BUILD_DIR/.metadata_never_index"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/ClaudeUsageMonitor" "$APP/Contents/MacOS/ClaudeUsageMonitor"

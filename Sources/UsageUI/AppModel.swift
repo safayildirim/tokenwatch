@@ -100,6 +100,11 @@ public final class AppModel {
     /// True when macOS is not showing the menu bar icon, so the app offers a Dock icon instead.
     public private(set) var menuBarIconHidden = false
     public private(set) var lastError: String?
+    /// Whether macOS lets the application show notifications, as last checked.
+    public private(set) var notificationPermission: NotificationPermission = .notDetermined
+    /// Why the last notification could not be shown, or nil when it could.
+    public private(set) var notificationProblem: String?
+    @ObservationIgnored let notifications: NotificationService
     public private(set) var openReport: DatabaseOpenReport
     /// Increases whenever stored data may have changed, so that open pages know to reload.
     public private(set) var dataVersion = 0
@@ -132,8 +137,9 @@ public final class AppModel {
 
     public init(db: UsageDatabase, adapters: [any SourceAdapter]? = nil, quotaFeeds: [any QuotaFeed]? = nil,
                 bridgeDirectory: URL = QuotaPaths.bridgeDirectory, registryDirectory: URL? = nil,
-                desktopCache: URL = QuotaPaths.desktopPlanUsageCache) {
+                desktopCache: URL = QuotaPaths.desktopPlanUsageCache, notificationSink: (any NotificationSink)? = nil) {
         self.db = db
+        notifications = NotificationService(sink: notificationSink ?? SystemNotificationSink())
         let store = SettingsStore(db: db)
         settingsStore = store
         settings = store.value
@@ -271,6 +277,11 @@ public final class AppModel {
 
     /// Heavy reloads are spaced at least this far apart, however often data changes.
     private static let minHeavyInterval: TimeInterval = 4
+    /// A heavy reload that took a long time is followed by a proportionally long pause, so that the dashboard never keeps
+    /// the processor busy for more than about a tenth of the time, however large the history has grown. Left open beside
+    /// a streaming session on this Mac's 92,000 requests, a fixed four second spacing used 12 to 38 percent.
+    private static let heavyPauseFactor: Double = 8
+    @ObservationIgnored private var lastHeavyDuration: TimeInterval = 0
 
     /// Tests and the snapshot tool set this to force the visible or hidden behaviour.
     @ObservationIgnored public var uiVisibilityOverride: Bool?
@@ -316,10 +327,13 @@ public final class AppModel {
     private func reload() async {
         await reloadLight()
         if uiIsVisible {
-            let wait = Self.minHeavyInterval - Date().timeIntervalSince(lastHeavyReload)
+            let spacing = max(Self.minHeavyInterval, lastHeavyDuration * Self.heavyPauseFactor)
+            let wait = spacing - Date().timeIntervalSince(lastHeavyReload)
             if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            let started = Date()
             await reloadHeavy()
             lastHeavyReload = Date()
+            lastHeavyDuration = lastHeavyReload.timeIntervalSince(started)
             heavyStale = false
         } else {
             heavyStale = true
@@ -400,7 +414,10 @@ public final class AppModel {
         let notes = alerts.evaluate(states: quotaStates, sources: collectorSnapshot.sources,
                                     activeProviders: active, settings: settings.notifications)
         guard !notes.isEmpty else { return }
-        NotificationDelivery.deliver(notes)
+        Task { [weak self, notifications] in
+            let report = await notifications.deliver(notes)
+            await MainActor.run { self?.notificationProblem = report.problem }
+        }
     }
 
     // MARK: Settings
@@ -409,7 +426,12 @@ public final class AppModel {
         let before = settings
         settingsStore.update(change)
         settings = settingsStore.value
-        if before.notifications.enabled == false, settings.notifications.enabled { NotificationDelivery.requestAuthorization() }
+        if before.notifications.enabled == false, settings.notifications.enabled {
+            Task { [weak self, notifications] in
+                let permission = await notifications.requestPermission()
+                await MainActor.run { self?.notificationPermission = permission }
+            }
+        }
         if before.showUnverifiedQuota != settings.showUnverifiedQuota || before.quotaRefreshSeconds != settings.quotaRefreshSeconds {
             Task { await quota.refresh(force: true) }
         }
@@ -471,12 +493,14 @@ public final class AppModel {
         "\(Int((w.utilizationPercent ?? 0).rounded()))%" + (w.freshness == .stale ? "*" : "")
     }
 
-    /// The figures of a pool for the menu bar: its shortest and its longest displayable window.
+    /// The figures of a pool for the menu bar: its shortest and its longest window. A window that has no current value,
+    /// such as one that has just reset, shows a dash in its own place. Showing the other window's figure there would
+    /// pass a weekly percentage off as a five-hour one.
     private func figures(of pool: QuotaPoolState, onlyShortest: Bool = false) -> String? {
-        let shown = pool.windows.filter(\.isDisplayable)
-        guard let first = shown.first else { return nil }
-        if onlyShortest || shown.count == 1 { return Self.percentText(first) }
-        return Self.percentText(first) + " · " + Self.percentText(shown[shown.count - 1])
+        guard pool.windows.contains(where: \.isDisplayable), let first = pool.windows.first, let last = pool.windows.last else { return nil }
+        func text(_ w: QuotaWindowState) -> String { w.isDisplayable ? Self.percentText(w) : "–" }
+        if onlyShortest || pool.windows.count == 1 { return text(first) }
+        return text(first) + " · " + text(last)
     }
 
     /// One line per displayable window, grouped by provider, for the menu bar tooltip.
@@ -542,6 +566,20 @@ public final class AppModel {
     }
 
     public var policy: StatusPolicy { settings.statusPolicy }
+
+    // MARK: Notifications
+
+    /// Looks up whether macOS lets the application show notifications.
+    public func refreshNotificationPermission() async {
+        notificationPermission = await notifications.permission()
+    }
+
+    /// Shows a notification that has nothing to do with any quota, and records what happened to it.
+    public func sendTestNotification() async {
+        let report = await notifications.sendTest()
+        notificationProblem = report.problem
+        notificationPermission = await notifications.permission()
+    }
 
     // MARK: Navigation helpers
 
@@ -651,31 +689,5 @@ public enum CommandLineActions {
         }
         print("login item: \(LoginItem.statusDescription)")
         return true
-    }
-}
-
-// MARK: - Notifications
-
-enum NotificationDelivery {
-    /// Notifications need an app bundle. A bare command line process has none, and asking for the
-    /// notification center there would crash.
-    private static var isAvailable: Bool { Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app" }
-
-    static func requestAuthorization() {
-        guard isAvailable else { return }
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-    }
-
-    static func deliver(_ notes: [AlertNotification]) {
-        guard isAvailable else { return }
-        let center = UNUserNotificationCenter.current()
-        for note in notes {
-            let content = UNMutableNotificationContent()
-            content.title = note.title
-            content.body = note.body
-            content.sound = .default
-            content.threadIdentifier = note.kind.rawValue
-            center.add(UNNotificationRequest(identifier: note.key, content: content, trigger: nil))
-        }
     }
 }

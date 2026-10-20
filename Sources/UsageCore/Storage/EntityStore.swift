@@ -138,7 +138,14 @@ final class EntityResolver {
 ///   confirmed" the measure of freshness.
 enum QuotaStore {
     /// Reports whose reset times differ by less than this belong to the same cycle.
-    static let cycleToleranceMs: Int64 = 5 * 60_000
+    ///
+    /// The reset time of one cycle is reported with a jitter of a few seconds, because the provider fixes it when the
+    /// window's first request arrives and rounds it to whole seconds. On this Mac's Codex history, the reports of
+    /// one cycle never differed by more than 13 seconds, while two different pools whose windows began a minute apart
+    /// (readings of an account that older files do not name) differed by 53 to 74 seconds. A tolerance of five
+    /// minutes merged such pools into one cycle and made their readings alternate. Half a minute keeps the jitter
+    /// together and the pools apart.
+    static let cycleToleranceMs: Int64 = 30_000
 
     static func record(_ o: QuotaObservation, originSessionID: Int64?, resolver: EntityResolver) throws {
         let c = resolver.c

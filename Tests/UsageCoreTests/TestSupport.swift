@@ -18,6 +18,13 @@ final class TestEnv {
         db = try UsageDatabase.open(at: dbURL)
     }
 
+    /// A second environment with an empty database and a copy of another environment's Codex files, which stands for
+    /// deleting the application's data and importing the same history again.
+    convenience init(copyingCodexFilesFrom other: TestEnv) throws {
+        try self.init()
+        try FileManager.default.copyItem(at: other.codexHome, to: codexHome)
+    }
+
     deinit { try? FileManager.default.removeItem(at: root) }
 
     var adapter: ClaudeCodeAdapter { ClaudeCodeAdapter(root: projects) }
@@ -218,13 +225,45 @@ enum CodexFixture {
                     payload: "{\"type\":\"token_count\",\"info\":\(info),\"rate_limits\":\(rate ?? rateLimits())}")
     }
 
-    static func tokenUsageRecord(ordinal: Int, at ms: Int64, response: String, usage: Usage, total: Usage, session: String = sessionA) -> String {
+    /// A usage record. `thread` is the thread that made the response, which differs from the file's own thread in a
+    /// record that a fork copied from its parent. `counter` is the thread's running counter after the response.
+    static func tokenUsageRecord(ordinal: Int, at ms: Int64, response: String, usage: Usage, total: Usage, session: String = sessionA,
+                                 thread: String? = nil) -> String {
         line("token_usage_record", ordinal: ordinal, at: ms,
-             payload: "{\"thread_id\":\"\(session)\",\"turn_id\":\"t1\",\"session_id\":\"\(session)\",\"response_id\":\"\(response)\",\"usage\":\(usage.json),\"turn_token_usage\":\(total.json),\"thread_token_usage\":\(total.json)}")
+             payload: "{\"thread_id\":\"\(thread ?? session)\",\"turn_id\":\"t1\",\"session_id\":\"\(thread ?? session)\",\"response_id\":\"\(response)\",\"usage\":\(usage.json),\"turn_token_usage\":\(total.json),\"thread_token_usage\":\(total.json)}")
     }
 
     static func compacted(ordinal: Int, at ms: Int64) -> String {
         line("compacted", ordinal: ordinal, at: ms, payload: "{\"window_number\":1,\"window_id\":\"w1\",\"message\":\"REDACTED\",\"replacement_history\":[],\"latest_token_usage_record\":null}")
+    }
+
+    /// A compaction marker that carries the usage record of the request that summarized the conversation.
+    static func compacted(ordinal: Int, at ms: Int64, response: String, usage: Usage, session: String = sessionA) -> String {
+        line("compacted", ordinal: ordinal, at: ms,
+             payload: "{\"window_number\":1,\"window_id\":\"w1\",\"message\":\"REDACTED\",\"replacement_history\":[],\"compaction_response_id\":\"\(response)\",\"latest_token_usage_record\":{\"response_id\":\"\(response)\",\"thread_id\":\"\(session)\",\"usage\":\(usage.json)}}")
+    }
+
+    /// A fork of a session written the older way. As Codex does, it repeats the parent's lines unchanged, in the same
+    /// positions and with the same figures, in a burst at the instant of the fork, and then continues with `own`
+    /// responses written at `ownAt`.
+    static func forkOfEventSession(id: String, parent: String, parentCount: Int, at forkAt: Int64, own: [Usage] = [],
+                                   ownAt: [Int64] = [], copySpreadMs: Int64 = 1, account: String? = nil,
+                                   originator: String = "codex_exec", each: Usage = Usage(input: 1000, cached: 600, output: 50, reasoning: 20),
+                                   rate: String? = nil) -> [String] {
+        var out = [header(id: id, at: forkAt, originator: originator, account: account, forkedFrom: parent), turnContext(ordinal: 1, at: forkAt + 1)]
+        var total = Usage(input: 0, output: 0)
+        for i in 0..<parentCount {
+            total = total + each
+            out.append(message(ordinal: 2 + i * 2, at: forkAt + 2 + Int64(i) * copySpreadMs))
+            out.append(tokenCount(ordinal: 3 + i * 2, at: forkAt + 3 + Int64(i) * copySpreadMs, last: each, total: total, rate: rate))
+        }
+        var ordinal = 2 + parentCount * 2
+        for (i, usage) in own.enumerated() {
+            total = total + usage
+            out.append(tokenCount(ordinal: ordinal, at: i < ownAt.count ? ownAt[i] : forkAt + 20_000 + Int64(i) * 5000, last: usage, total: total, rate: rate))
+            ordinal += 2
+        }
+        return out
     }
 
     /// A session of `count` responses, written the older way (one `token_count` event per response).
@@ -238,5 +277,14 @@ enum CodexFixture {
             out.append(tokenCount(ordinal: 3 + i * 2, at: ms + 2000 + Int64(i) * 5000, last: each, total: total))
         }
         return out
+    }
+}
+
+extension CodexFixture {
+    /// The line Codex writes when the model or the service tier of a thread is set.
+    static func settings(ordinal: Int, at ms: Int64, model: String, tier: String?) -> String {
+        let tierJSON = tier.map { "\"\($0)\"" } ?? "null"
+        return line("event_msg", ordinal: ordinal, at: ms,
+                    payload: "{\"type\":\"thread_settings_applied\",\"thread_settings\":{\"model\":\"\(model)\",\"service_tier\":\(tierJSON)}}")
     }
 }

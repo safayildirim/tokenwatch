@@ -3,15 +3,24 @@ import SQLite3
 
 /// Recounts the token usage of Codex sessions directly from the original files and compares it with the database.
 ///
-/// The recount shares no code with the importer. It decodes lines with Foundation's JSON parser instead of the
-/// streaming scanner, and it does not use the figures that the importer relies on to count a response. For a
-/// session written the older way it adds up the growth of the running totals between events, where the importer
-/// uses the per-response figures of each event. Agreement between the two therefore verifies the importer, the
-/// deduplication and the storage together.
+/// The recount shares no code with the importer and uses a different method. It decodes lines with Foundation's JSON
+/// parser instead of the streaming scanner. It does not add up the figures of individual responses, which is what the
+/// importer does. It reads the running counters that Codex keeps itself, and counts how far they grew:
+///
+/// - A session with usage records is measured by the `thread_token_usage` counter of its records, which Codex grows by
+///   the usage of every response it records, including the ones that never produce a `token_count` event, such as
+///   the request that summarizes a conversation when it is compacted.
+/// - A session written the older way is measured by the growth of the running totals of its `token_count` events.
+///   A counter that goes down was reset, and counting starts again from its new value.
+/// - A fork copies its parent's history, counter included. Its own usage is how far the counter grew beyond the point
+///   up to which the fork repeats its parent line by line.
+///
+/// Agreement therefore verifies the importer, the deduplication and the storage together, and a disagreement between a
+/// session's counter and the sum of its records is reported as well.
 ///
 /// Codex also keeps its own per-thread token count in `state_5.sqlite`. It can be compared as a second opinion. It
-/// is evidence only: it is built from the same events, and it knows nothing of responses that have a usage record
-/// but no event, nor of the history that a fork copied from its parent.
+/// is evidence only: it is built from the `token_count` events, so it knows nothing of responses that have a usage
+/// record but no event, nor of the history that a fork copied from its parent.
 public struct CodexVerifier: Sendable {
     public struct Counts: Sendable, Equatable {
         public var input: Int64 = 0       // Including the cached part, as OpenAI reports it.
@@ -50,6 +59,8 @@ public struct CodexVerifier: Sendable {
         public var recordSessions = 0
         public var eventSessions = 0
         public var forkSessions = 0
+        /// Sessions where the thread's own counter and the sum of its records disagree. That means usage the records do not show.
+        public var counterDisagreements: [String] = []
         public var state: StateComparison?
         public var isConsistent: Bool { mismatches.isEmpty && expected.total == database.total }
     }
@@ -62,19 +73,34 @@ public struct CodexVerifier: Sendable {
         self.adapter = adapter
     }
 
-    private struct Totals { var c = Counts(); var mode = "events"; var fork = false }
+    private struct Totals { var c = Counts(); var mode = "events"; var fork = false; var counterAgreesWithRecords = true }
+
+    /// The four figures that are compared, in the order input, cached, output, reasoning.
+    private typealias Figures = [Int64]
+
+    /// What one file says, reduced to what the recount needs.
+    private struct Recording {
+        var id: String
+        var forkedFrom: String?
+        /// Distinct records in file order: response id, the response's own usage, and the thread counter after it.
+        var records: [(id: String, usage: Figures, counter: Figures?)] = []
+        /// The running totals of the `token_count` events, with repeated snapshots removed.
+        var totals: [Figures] = []
+    }
 
     public func verify(stateDatabase: URL? = nil, progress: ((Int, Int) -> Void)? = nil) throws -> Report {
         var report = Report()
         let files = try adapter.discoverFiles()
-        var expected: [String: Totals] = [:]
+        var recordings: [String: Recording] = [:]
         for (index, file) in files.enumerated() {
             progress?(index, files.count)
-            guard let (id, totals) = try recount(file) else { continue }
+            guard let recording = try recount(file) else { continue }
             report.filesChecked += 1
             // A session present in two copies is counted from the first copy found.
-            if expected[id] == nil { expected[id] = totals }
+            if recordings[recording.id] == nil { recordings[recording.id] = recording }
         }
+        var expected: [String: Totals] = [:]
+        for (id, recording) in recordings { expected[id] = Self.expectedTotals(recording, parent: recording.forkedFrom.flatMap { recordings[$0] }) }
 
         let stored: [String: Counts] = try db.read { c in
             var out: [String: Counts] = [:]
@@ -106,6 +132,7 @@ public struct CodexVerifier: Sendable {
             case ("records", _): report.recordSessions += 1
             default: report.eventSessions += 1
             }
+            if !e.counterAgreesWithRecords { report.counterDisagreements.append(id) }
             // The number of responses may legitimately differ, because a response that has no event of its own is stored
             // as a request of its own while the recount sees it only as growth of the totals.
             if e.c.input != d.input || e.c.cached != d.cached || e.c.output != d.output || e.c.reasoning != d.reasoning {
@@ -119,21 +146,21 @@ public struct CodexVerifier: Sendable {
 
     // MARK: Recount
 
-    private func recount(_ file: SourceFileRef) throws -> (String, Totals)? {
-        let data = try Self.read(file)
-        var sessionID: String?
-        var forkCutoffMs: Int64?
-        var totals = Totals()
-        var usageRecords = Counts()
-        var usageRecordSeen = false
-        var previous: [String: Int64]?
-        var eventCounts = Counts()
+    private func recount(_ file: SourceFileRef) throws -> Recording? {
+        let data = try CodexFileContents.read(path: file.path)
+        var recording = Recording(id: file.sessionHint)
+        var sawHeader = false
+        var seenResponses = Set<String>()
+        var previousTotal: Figures?
 
-        let keys = ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"]
-        func ints(_ dict: [String: Any]) -> [String: Int64] {
-            Dictionary(uniqueKeysWithValues: keys.map { ($0, (dict[$0] as? NSNumber)?.int64Value ?? 0) })
+        func figures(_ dict: [String: Any]?) -> Figures? {
+            guard let dict else { return nil }
+            return ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"].map { (dict[$0] as? NSNumber)?.int64Value ?? 0 }
         }
-        func ms(_ iso: String?) -> Int64? { iso.flatMap { ISO8601Fast.parse($0) } }
+        func record(id: String?, usage: [String: Any]?, counter: [String: Any]?) {
+            guard let id, let u = figures(usage), seenResponses.insert(id).inserted else { return }
+            recording.records.append((id, u, figures(counter)))
+        }
 
         var start = data.startIndex
         while start < data.endIndex {
@@ -141,62 +168,69 @@ public struct CodexVerifier: Sendable {
             let line = data[start..<end]
             start = end < data.endIndex ? end + 1 : end
             // Only lines that can matter are decoded.
-            guard line.range(of: Data("\"session_meta\"".utf8)) != nil || line.range(of: Data("\"token_".utf8)) != nil,
+            guard line.range(of: Data("\"session_meta\"".utf8)) != nil || line.range(of: Data("\"token_".utf8)) != nil
+                    || line.range(of: Data("\"latest_token_usage_record\"".utf8)) != nil,
                   let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                   let type = object["type"] as? String, let payload = object["payload"] as? [String: Any] else { continue }
-            let at = ms(object["timestamp"] as? String)
-            if type == "session_meta", sessionID == nil {
-                sessionID = (payload["id"] as? String) ?? (payload["session_id"] as? String)
-                if payload["forked_from_id"] as? String != nil, let created = ms(payload["timestamp"] as? String) {
-                    forkCutoffMs = created + 1500
-                    totals.fork = true
-                }
-            }
-            let replayed = forkCutoffMs.map { cutoff in at.map { $0 <= cutoff } ?? false } ?? false
-            if type == "token_usage_record", let usage = payload["usage"] as? [String: Any] {
-                usageRecordSeen = true
-                if !replayed {
-                    let u = ints(usage)
-                    usageRecords.input += u["input_tokens"]!; usageRecords.cached += u["cached_input_tokens"]!
-                    usageRecords.output += u["output_tokens"]!; usageRecords.reasoning += u["reasoning_output_tokens"]!
-                    usageRecords.responses += 1
-                }
+            if type == "session_meta", !sawHeader {
+                sawHeader = true
+                recording.id = (payload["id"] as? String) ?? (payload["session_id"] as? String) ?? recording.id
+                recording.forkedFrom = payload["forked_from_id"] as? String
+            } else if type == "token_usage_record" {
+                record(id: payload["response_id"] as? String, usage: payload["usage"] as? [String: Any],
+                       counter: payload["thread_token_usage"] as? [String: Any])
+            } else if type == "compacted", let latest = payload["latest_token_usage_record"] as? [String: Any] {
+                record(id: latest["response_id"] as? String, usage: latest["usage"] as? [String: Any], counter: nil)
             } else if type == "event_msg", payload["type"] as? String == "token_count",
-                      let info = payload["info"] as? [String: Any], let total = info["total_token_usage"] as? [String: Any],
-                      let last = info["last_token_usage"] as? [String: Any] {
-                let t = ints(total)
-                if previous == t { continue }
-                if !replayed {
-                    // The growth of the running totals, except for the first event, which has no earlier total to subtract.
-                    let growth: [String: Int64] = previous.map { prev in t.reduce(into: [:]) { $0[$1.key] = $1.value - (prev[$1.key] ?? 0) } } ?? ints(last)
-                    eventCounts.input += growth["input_tokens"]!; eventCounts.cached += growth["cached_input_tokens"]!
-                    eventCounts.output += growth["output_tokens"]!; eventCounts.reasoning += growth["reasoning_output_tokens"]!
-                    eventCounts.responses += 1
-                }
-                previous = t
+                      let info = payload["info"] as? [String: Any], let total = figures(info["total_token_usage"] as? [String: Any]) {
+                if previousTotal == total { continue }
+                previousTotal = total
+                recording.totals.append(total)
             }
         }
-        guard let id = sessionID ?? Optional(file.sessionHint) else { return nil }
-        totals.mode = usageRecordSeen ? "records" : "events"
-        totals.c = usageRecordSeen ? usageRecords : eventCounts
-        return (id, totals)
+        return recording
     }
 
-    private static func read(_ file: SourceFileRef) throws -> Data {
-        guard file.isCompressed else { return try Data(contentsOf: URL(fileURLWithPath: file.path), options: .mappedIfSafe) }
-        let fd = open(file.path, O_RDONLY)
-        guard fd >= 0 else { throw FileAccessError(path: file.path, message: String(cString: strerror(errno)), code: errno) }
-        defer { close(fd) }
-        let reader = try ZstdFileReader(fd: fd)
-        var out = Data()
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 1 << 20)
-        defer { buffer.deallocate() }
-        while true {
-            let n = try reader.read(into: buffer, capacity: 1 << 20)
-            if n == 0 { break }
-            out.append(buffer, count: n)
+    /// How far a series of cumulative figures grew. A figure that goes down means the counter was reset, and counting
+    /// starts again from the new value.
+    private static func growth(_ series: [Figures], from base: Figures? = nil) -> Figures {
+        var sum: Figures = [0, 0, 0, 0]
+        var previous = base ?? [0, 0, 0, 0]
+        for value in series {
+            let reset = zip(value, previous).contains { $0 < $1 }
+            for i in 0..<4 { sum[i] += reset ? value[i] : value[i] - previous[i] }
+            previous = value
         }
-        return out
+        return sum
+    }
+
+    private static func expectedTotals(_ r: Recording, parent: Recording?) -> Totals {
+        var totals = Totals()
+        totals.fork = r.forkedFrom != nil
+        var figures: Figures
+        var responses = r.records.count
+        if !r.records.isEmpty {
+            totals.mode = "records"
+            // What the fork repeats from its parent: the records whose response the parent also has.
+            let inheritedIDs = Set(parent?.records.map(\.id) ?? [])
+            let own = r.records.filter { !inheritedIDs.contains($0.id) }
+            let inheritedCounter = r.records.last(where: { inheritedIDs.contains($0.id) })?.counter
+            let counters = own.compactMap(\.counter)
+            // The counter of the thread's own records, from the point the fork diverges from its parent.
+            figures = counters.count == own.count && !counters.isEmpty
+                ? growth(counters, from: inheritedCounter) : growth(own.map(\.usage))
+            let summed = own.reduce(into: [Int64](repeating: 0, count: 4)) { acc, record in for i in 0..<4 { acc[i] += record.usage[i] } }
+            totals.counterAgreesWithRecords = (counters.count != own.count || counters.isEmpty) ? true : summed == figures
+        } else {
+            // The events of a fork that are also the parent's, in the same order, are its inherited history.
+            var skip = 0
+            if let parent { while skip < r.totals.count, skip < parent.totals.count, r.totals[skip] == parent.totals[skip] { skip += 1 } }
+            figures = growth(Array(r.totals.dropFirst(skip)), from: skip > 0 ? r.totals[skip - 1] : nil)
+            responses = r.totals.count - skip
+        }
+        totals.c.input = figures[0]; totals.c.cached = figures[1]; totals.c.output = figures[2]; totals.c.reasoning = figures[3]
+        totals.c.responses = responses
+        return totals
     }
 
     // MARK: Codex's own figures

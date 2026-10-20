@@ -7,11 +7,14 @@ import Foundation
 /// dated: a new price is added as a new row with a later `effectiveFromMs` instead of editing an
 /// old one, which keeps estimates for past usage stable.
 ///
-/// A model that has no rate card is reported as unpriced; no generic price is ever substituted. Only
-/// Anthropic list prices are built in. No OpenAI rate card ships with the application, because its prices
-/// could not be verified from this Mac, so OpenAI usage is shown as unpriced until the user adds a card.
+/// A model that has no rate card is reported as unpriced; no generic price is ever substituted. The OpenAI
+/// cards are in `OpenAIPricing.swift`.
 public enum PricingCatalog {
+    /// The date on which the Anthropic list prices were checked.
     public static let asOf = "2026-10-06"
+
+    /// The dates on which the built-in prices were checked, for the places that tell the user how current they are.
+    public static var asOfSummary: String { "Anthropic as of \(asOf), OpenAI as of \(openAIAsOf)" }
 
     public static let builtin: [PriceRate] = {
         let src = "Anthropic list price, checked \(asOf)."
@@ -42,7 +45,7 @@ public enum PricingCatalog {
         let fastNote = "Fast mode, billed at 2x the standard rate. \(src)"
         rates.append(PriceRate(provider: .anthropic, model: "claude-opus-5-5", speed: "fast", input: 8, output: 40, cacheRead: 0.40, note: fastNote))
         rates.append(PriceRate(provider: .anthropic, model: "claude-opus-5", speed: "fast", input: 10, output: 50, cacheRead: 1.00, note: fastNote))
-        return rates
+        return rates + PricingCatalog.openAI
     }()
 }
 

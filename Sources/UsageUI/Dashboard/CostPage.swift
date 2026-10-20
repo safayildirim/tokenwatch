@@ -14,6 +14,9 @@ struct CostPage: View {
     var body: some View {
         PageScroll {
             HStack { RangePicker(selection: $range); Spacer() }
+            Label("These are API-equivalent estimates: what the same tokens would cost at pay-as-you-go prices. They are not what a Claude or ChatGPT subscription charges you.",
+                  systemImage: "info.circle")
+                .font(.callout).foregroundStyle(.secondary)
             if !model.settings.showEstimatedCost {
                 Card { Text("Cost estimates are switched off in Settings.").foregroundStyle(.secondary) }
             } else if providers.isEmpty {
@@ -32,6 +35,21 @@ struct CostPage: View {
                             .font(.headline)
                         Text("No rate card is installed for \(model.providerName(row.provider))'s models, and a price is never guessed. Add the published prices for your models under Settings → Pricing and the estimate fills in for past and future usage.")
                             .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                if providers.contains(where: { $0.cost.derivedTokens > 0 || $0.cost.userPricedTokens > 0 }) {
+                    Card("Where the prices come from") {
+                        ForEach(providers.filter { $0.cost.derivedTokens > 0 || $0.cost.userPricedTokens > 0 }) { row in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(model.providerName(row.provider)).font(.subheadline.weight(.semibold))
+                                if row.cost.derivedTokens > 0 {
+                                    Text("\(Fmt.tokens(row.cost.derivedTokens)) tokens date from before a price cut. The provider announced the cut as a percentage, so the earlier price is worked out from the published price after it and was not itself published.")
+                                }
+                                if row.cost.userPricedTokens > 0 {
+                                    Text("\(Fmt.tokens(row.cost.userPricedTokens)) tokens are priced with prices that you entered.")
+                                }
+                            }.font(.callout).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Card("Cost per day", subtitle: "Estimated, by provider. Days with unpriced usage are lower bounds.") {
@@ -56,7 +74,7 @@ struct CostPage: View {
                         GridRow {
                             Text("Model").gridColumnAlignment(.leading)
                             Text("Provider").gridColumnAlignment(.leading)
-                            Text("Requests"); Text("Processed"); Text("Estimated cost")
+                            Text("Requests"); Text("Processed"); Text("Estimated cost"); Text("Prices").gridColumnAlignment(.leading)
                         }.font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Divider()
                         ForEach(models) { m in
@@ -66,6 +84,7 @@ struct CostPage: View {
                                 Text(Fmt.grouped(Int64(m.requests))).monospacedDigit()
                                 Text(Fmt.tokens(m.tokens.totalProcessed)).monospacedDigit()
                                 Text(Fmt.cost(m.cost)).monospacedDigit()
+                                Text(priceBasis(m.cost)).foregroundStyle(.secondary).gridColumnAlignment(.leading)
                             }.font(.callout)
                         }
                     }
@@ -75,6 +94,16 @@ struct CostPage: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task(id: "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(model.dataVersion)|\(model.scopeVersion)") { await load() }
+    }
+
+    /// Says where the prices behind a model's estimate come from.
+    private func priceBasis(_ cost: EstimatedCost) -> String {
+        if cost.picoUSD == 0 && cost.unpricedTokens > 0 { return "unpriced" }
+        var parts = ["published"]
+        if cost.derivedTokens > 0 { parts.append("partly derived") }
+        if cost.userPricedTokens > 0 { parts = ["yours"] }
+        if cost.unpricedTokens > 0 { parts.append("partly unpriced") }
+        return parts.joined(separator: ", ")
     }
 
     private func load() async {

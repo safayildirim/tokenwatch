@@ -6,11 +6,20 @@ import UsageUI
 struct ClaudeUsageMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    @State private var model: AppModel? = try? AppModel.bootstrap()
-    @State private var startupError: String?
+    @State private var model: AppModel?
+
+    /// Held for as long as the process runs. Releasing it would let a second copy start collecting.
+    private static var instanceLock: SingleInstanceLock?
 
     init() {
         if CommandLineActions.handle() { exit(0) }
+        // Opening the app a second time brings the running copy forward instead of starting a second collector.
+        guard let lock = SingleInstanceLock.acquire() else {
+            SingleInstanceLock.activateRunningCopy()
+            exit(0)
+        }
+        Self.instanceLock = lock
+        _model = State(initialValue: try? AppModel.bootstrap())
     }
 
     var body: some Scene {

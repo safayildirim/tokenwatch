@@ -324,7 +324,7 @@ public struct ExportService: Sendable {
             "generated_at": iso(Date()),
             "time_zone": calendar.timeZone.identifier,
             "rows": rows,
-            "pricing_note": "Cost columns are API-equivalent estimates from published list prices (as of \(PricingCatalog.asOf)). They are not subscription charges.",
+            "pricing_note": "Cost columns are API-equivalent estimates from published list prices (\(PricingCatalog.asOfSummary)). They are not subscription charges.",
             "quota_note": "Subscription utilization is only ever taken from values reported by the provider. It is never computed from token counts, and the utilization of different pools is never added together.",
             "privacy_note": "Contains usage metadata only. No prompts, responses, source code or credentials.",
             "columns": columns.map { ["name": $0.name, "unit": $0.unit, "definition": $0.definition] },

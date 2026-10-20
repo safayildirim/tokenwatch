@@ -17,6 +17,7 @@ func usage() -> Never {
       quota       Show quota windows and how quota data is arriving
       export      Export data: --kind sessions|requests|projects|models|daily|weekly|quotaHistory --format csv|json --out PATH
       bench       Import into a fresh database and report time and memory
+      statusline-check  Rehearse installing the status line helper on a copy of Claude Code's settings (changes nothing)
 
     options:
       --db PATH         database file (default: the app's database)
@@ -166,6 +167,7 @@ do {
             for m in report.mismatches.prefix(10) {
                 print("mismatch \(m.sessionID.prefix(8)) \(m.mode): expected input=\(m.expected.input) output=\(m.expected.output), database input=\(m.database.input) output=\(m.database.output)")
             }
+            print("thread counters versus sum of usage records: \(report.counterDisagreements.isEmpty ? "all agree" : "\(report.counterDisagreements.count) disagree: " + report.counterDisagreements.prefix(5).map { String($0.prefix(8)) }.joined(separator: ", "))")
             if let st = report.state {
                 print("Codex's own per-thread count (state_5.sqlite): threads=\(st.threads) equal=\(st.equal) database_higher=\(st.databaseHigher) (surplus \(formatted(st.surplusTokens)) tokens) database_lower=\(st.databaseLower)")
                 for e in st.examples { print("  \(e)") }
@@ -229,6 +231,60 @@ do {
             print("feed \(feed.id.rawValue): folder exists=\(feed.rootsExist) observations=\(feed.observationCount) sources=\(feed.originCount)")
         }
         print("status line helper installed in Claude Code settings: \(StatusLineInstaller.inspect().isInstalled)")
+
+    case "statusline-check":
+        // Rehearses the whole path of the Claude quota integration without touching the real settings or sending a
+        // request: the settings are only read, the install is done on a copy, and the helper is fed a made-up payload.
+        let fm = FileManager.default
+        let settings = QuotaPaths.claudeSettings
+        let before = StatusLineInstaller.inspect(settingsURL: settings)
+        print("settings file: \(settings.path) exists=\(before.settingsExists) valid_json=\(before.settingsIsValidJSON)")
+        print("status line configured today: \(before.command != nil ? "yes" : "no") helper_installed=\(before.isInstalled) non_command_status_line=\(before.usesNonCommandStatusLine)")
+        guard let helper = option("--bridge").map({ URL(fileURLWithPath: $0) }) ?? StatusLineInstaller.locateBridge() else {
+            print("helper binary: NOT FOUND (pass --bridge PATH)"); exit(1)
+        }
+        print("helper binary: \(helper.path)")
+        let scratch = fm.temporaryDirectory.appendingPathComponent("ccu-statusline-check-\(UUID().uuidString)")
+        try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: scratch) }
+        let copy = scratch.appendingPathComponent("settings.json")
+        if before.settingsExists { try fm.copyItem(at: settings, to: copy) }
+        let originalBytes = fm.contents(atPath: copy.path)
+        _ = try StatusLineInstaller.install(settingsURL: copy, bridge: helper)
+        let after = StatusLineInstaller.inspect(settingsURL: copy)
+        print("on the copy: helper_installed=\(after.isInstalled) chains_existing_command=\(after.chainedCommand != nil)")
+        print("on the copy: statusLine command would be: \(after.command ?? "-")")
+        if let originalBytes, let edited = fm.contents(atPath: copy.path) {
+            let a = String(decoding: originalBytes, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+            let b = String(decoding: edited, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+            let changedLines = Set(b).subtracting(Set(a)).count + Set(a).subtracting(Set(b)).count
+            print("on the copy: lines that differ from the original: \(changedLines) (the rest of the file is byte for byte the same)")
+            try StatusLineInstaller.uninstall(settingsURL: copy)
+            let restored = fm.contents(atPath: copy.path) == originalBytes
+            print("on the copy: uninstall restores the original file exactly: \(restored)")
+        }
+        // Run the exact command that would be installed, with a made-up Claude Code payload.
+        let quotaDir = scratch.appendingPathComponent("quota")
+        let payload = #"{"session_id":"check-1","cost":{"total_api_duration_ms":1000,"total_cost_usd":0.1},"rate_limits":{"five_hour":{"used_percentage":12.5,"resets_at":\#(Int(Date().timeIntervalSince1970) + 7200)},"seven_day":{"used_percentage":40,"resets_at":\#(Int(Date().timeIntervalSince1970) + 86400 * 3)}}}"#
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", after.command ?? ShellQuote.quote(helper.path)]
+        process.environment = ["CLAUDE_USAGE_MONITOR_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"]
+        let stdin = Pipe(), stdout = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        try process.run()
+        stdin.fileHandleForWriting.write(Data(payload.utf8))
+        try stdin.fileHandleForWriting.close()
+        let output = String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        print("helper run: exit=\(process.terminationStatus) printed: \(output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))")
+        let readings = StatusLineQuotaSource.observations(in: quotaDir)
+        for r in readings.sorted(by: { $0.windowKey < $1.windowKey }) {
+            print("parsed \(r.windowKey): \(r.utilizationPercent)% resets \(r.resetsAt.map { "\($0)" } ?? "?") observed \(r.observedAt) authority=\(r.authority.rawValue)")
+        }
+        print(readings.count == 2 ? "RESULT: the path works with the documented payload; a real subscription event has still to be observed" : "RESULT: PROBLEM (expected two windows)")
+        exit(readings.count == 2 ? 0 : 1)
 
     case "export":
         guard let kindName = option("--kind"), let kind = ExportKind(rawValue: kindName),

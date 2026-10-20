@@ -1,8 +1,8 @@
 # Validation and test results
 
-## 1. Automated tests: 254 tests, 0 failures
+## 1. Automated tests: 307 tests, 0 failures
 
-`swift test` (about 100 seconds). Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
+`swift test` (about 2 minutes). Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
 
 | Area | Suite (tests) | What it proves |
 |---|---|---|
@@ -32,13 +32,26 @@
 | Concurrency | `ConcurrentProvidersTests` | Both providers are collected live while files grow, restarts and a reopened database change nothing, there are no duplicate requests, and a corrupt Codex file does not degrade Claude's health (this test found and fixed a bug where one source's failing file marked every source degraded). |
 | UI | `AppModelTests` (+7), `ViewLogicTests` | Menu bar modes per provider, side by side, highest utilization (a comparison, not a sum), the choice survives a restart, stale marks. Active sessions per provider. The dashboard scope narrows dashboard figures but not the menu bar and drops incompatible choices. |
 
+### Added by the stabilization phase (53 tests)
+
+| Area | Suite | What it proves |
+|---|---|---|
+| Codex lineage and mixed formats | `CodexLineageTests` (16) | A fork is recognized by what its lines say, so a response the child makes 900 ms after the fork is counted and a slow copy (3 s) is not. Without the parent's file the fork falls back to its time and says so, and the notice is replaced when the file is read again. A fork of a record session repeats response ids and is attributed to the thread that made them, in either read order. A file that mixes event-only and record parts counts every response once, whichever of event and record comes first. A compaction request without an event is counted once, and also when only the marker has it. A thread counter that grew more than its records is reported and not invented. A counter reset invents nothing. Unrelated runs with identical figures are two requests. A response seen by two products of one provider is one request. An active and an archived copy are one session. A changed file format is reported. |
+| Quota freshness | `QuotaFreshnessTests` (11), `StatusLineFirstSightTests` (3) | Reading an old file again, touching it, copying it and rebuilding the database never make a reading fresh. Cycles 53 s apart are not merged. A lower reading that arrives later does not replace the higher one of its cycle, and a new cycle does not inherit the old value. Account switches keep both accounts. Future-dated readings are not recorded and a clock moved back gives stale, not new. Claude readings survive restart and rewrite unchanged. The real helper dates a first sight with the transcript's modification time, and does not re-date remaining windows when one drops out at its reset. |
+| OpenAI prices | `OpenAIPricingTests` (9) | Published prices applied per category. Reasoning priced once. A price change applies from its day and earlier usage keeps the earlier price. Derived cards are labelled and counted. The 272,000-token boundary. Fast, priority and flex tiers, and an unknown tier is unpriced. A model before its launch, an unlisted name, `codex-auto-review` and a dated snapshot are unpriced. A user price wins and is labelled. The catalog has no duplicates. |
+| Reliability | `AcceleratedSoakTests` (1), `LiveLatencyTests` (1) | 45 simulated days with restarts, compression, archiving, a folder outage, forks and damaged lines stay exact. Nine concurrent sessions reach the database in 0.31 s. |
+| Delivery and start-up | `NotificationServiceTests` (8), `SingleInstanceTests` (3) | Notifications are shown when allowed, permission is asked once, a denial, an app without a bundle and a refusal by macOS are each reported in words. A second copy cannot take the lock, and a crashed holder never keeps a later launch out. |
+| Menu bar | `AppModelTests` (+1) | A window that has just reset shows a dash and never the weekly figure in its place. |
+
+Fixtures that no longer represented correct behavior were corrected and no assertion was weakened. The fork fixtures now repeat the parent's lines in the same positions, as real files do, where they used different positions and relied on the time window; the "model without a price" fixture uses a model that is really unlisted, since the former default model is now priced; the helper test evaluates a reading at the current time, because the helper dates readings with the real clock and a reading dated after the evaluation time is rejected on purpose.
+
 ## 2. Validation against the real installation
 
-The Claude figures below were measured on the previous, Claude-only build and **re-run on the multi-provider build**: `ccu verify --provider claude` is consistent (793 files, 86,614 requests, 170 sessions; uncached input 177,106, output 59,815,391, cache read 27,231,882,256, cache creation 386,054,348, all equal to the independent recount).
+The Claude figures below were measured on the previous, Claude-only build and **re-run on the multi-provider build**: `ccu verify --provider claude` is consistent, and was run again on the final stabilization build (795 files, 87,593 requests, 172 sessions; uncached input 179,064, output 60,820,786, cache read 27,503,585,054, cache creation 389,356,354, all equal to the independent recount).
 
 ### OpenAI (Codex) on the real data
 
-`ccu verify --provider openai`: 232 sessions, input 494,170,138, cached 473,721,088, output 1,846,647, reasoning 707,205, **all equal to the independent recount**, and 225 of Codex's own 232 thread totals agree exactly. Every difference from Codex's own figure is explained (usage records without events, and one fork). See [OPENAI-CODEX](OPENAI-CODEX.md).
+`ccu verify --provider openai`: 232 sessions, input 494,170,138, cached 473,721,088, output 1,846,647, reasoning 707,205, **all equal to the independent recount**, which now measures each thread by Codex's own running counter and agrees with the sum of every thread's records. 225 of Codex's own 232 thread totals agree exactly. Every difference from Codex's own figure is explained (usage records without events, and one fork). See [OPENAI-CODEX](OPENAI-CODEX.md).
 
 ### Original Claude validation
 
@@ -77,7 +90,7 @@ Six simultaneous simulated sessions with sub-agents and streaming duplicates wro
 
 ### Launch at login
 
-`SMAppService` registration was exercised on the built app: `--login-item enable` registered it with the correct bundle identifier and path (visible in the background-task-management database), `disable` unregistered it. It was left **disabled**; turn it on from Settings → General. The optional LaunchAgent script is the alternative.
+Verified on the installed app. `--login-item enable` registers it through `SMAppService` without needing approval, `status` reports Enabled, the registration is still Enabled after the app is quit, reinstalled and started again, and there is no LaunchAgent, so there is a single registration. A second copy started by hand exits at once (see below). **Not verified:** that macOS actually starts the app at the next login or reboot, which needs a logout.
 
 ### Privacy and network
 
@@ -94,26 +107,45 @@ Every page, the popover, session details and settings were rendered by the real 
 | # | Criterion | Status |
 |---|---|---|
 | 1 | Builds and runs as a native macOS application | Met. `scripts/build-app.sh`, signed `.app`, installed and running |
-| 2 | Starts at login, monitors without a terminal | Met. Login item registration verified; also a LaunchAgent. Left disabled for you to choose |
+| 2 | Starts at login, monitors without a terminal | Registered and enabled through `SMAppService`. An actual start at login is not verified |
 | 3 | Existing local sessions are imported | Met. 170 sessions, 86 K requests on first launch |
 | 4 | New sessions detected automatically | Met. FSEvents, plus reconciliation |
 | 5 | Concurrent sessions tracked independently | Met. Load test and unit tests |
 | 6 | Input, output, cache-read, cache-creation accurately recorded | Met. Exact against an independent recount |
 | 7 | Deduplicated across restarts and sources | Met. Crash test, idempotent re-import, source-merge test |
 | 8 | Totals verifiable against original records | Met. `ccu verify` and Diagnostics → Verify |
-| 9 | Five-hour and weekly quota shown when authoritative data is available | **Implemented and tested with the documented payload; not yet seen with your live account.** It needs the helper installed (one click) and a terminal Claude Code session |
+| 9 | Five-hour and weekly quota shown when authoritative data is available | Codex: shown, from the real files. Claude: **implemented and rehearsed with the documented payload; not yet seen with your live account** |
 | 10 | Missing quota identified, not fabricated | Met. "Unavailable", dashes, no token-based percentage anywhere |
 | 11 | Menu bar shows activity and usage | Met |
 | 12 | Dashboard supports session, model and project analysis | Met |
 | 13 | History survives restarts | Met |
 | 14 | Imports and live updates do not noticeably impact macOS | Met. 5.9 s and 28 MB for 4.75 GB; about 0.05 to 0.25 % CPU idle |
-| 15 | Tests cover critical accounting and lifecycle | Met. 254 tests |
-| 16 | Long runs without leaks or duplicates | Evidence over 10 minutes (flat memory) and idempotence tests; a multi-day soak was not run |
+| 15 | Tests cover critical accounting and lifecycle | Met. 307 tests |
+| 16 | Long runs without leaks or duplicates | Flat memory over minutes, an accelerated 45-day run, idempotence tests. A multi-day soak was not run |
 | 17 | Documented install and build | Met. README |
 
-## 4. Not verified, stated plainly
+## 4. Live validation of the installed app (2026-10-20)
 
-* **A live `rate_limits` payload from your subscription.** The helper, evaluator, coordinator and alerts are verified end to end against the documented JSON, but I did not install the helper into your Claude Code settings or send a real message to produce one, since that would change your configuration and use your account.
-* **Multi-day soak and sleep/wake on hardware.** The wake path (`NSWorkspace.didWakeNotification` triggering reconciliation) is covered by the missed-events test, which exercises the same reconciliation, but a real laptop sleep was not performed.
-* **User-notification delivery.** The alert logic is tested; delivery through `UNUserNotificationCenter` needs permission granted in System Settings the first time it is enabled, and was not exercised.
-* **The sidebar of the dashboard window** renders as an empty panel in the offscreen snapshots (an artefact of rendering the system sidebar material outside a screen); its structure and navigation are covered by the state tests.
+Done with the real installed app, driven through the macOS accessibility interface (reading and clicking the real windows), because this session has no permission to capture the screen. Nothing below was inferred from offscreen rendering.
+
+**Verified**
+
+* **Single instance.** A second copy of the binary exits within three seconds and the first keeps running.
+* **Menu bar.** The status item exists and its popover opens (a click through accessibility) and shows both providers with the right state: Claude "unavailable", two OpenAI pools (a named account and the unassigned one), the five-hour window as "reset 3d 17h ago, the new value appears after OpenAI next reports it" and the weekly window as 3 % and stale. **Defect found and fixed:** the menu bar title said "O 3%*", which was the weekly figure shown as if it were the short window. It now says "O –".
+* **The icon is not visible on this Mac's menu bar.** The item sits inside the notch (its position is x 829 to 908 on a screen whose notch covers 771 to 956), the app detects this and says so in a banner. This cannot be fixed by the app. Free some menu bar space.
+* **Dashboard.** The window opens from the Applications folder, its sidebar lists all nine pages, and Overview, Cost, Quota, Providers and Diagnostics show the real figures (Cost with the new "not a subscription charge" notice and a "Prices" column). The provider scope filter changes the Overview from 369 M to 3.01 M tokens and back. The minimum window size is enforced. Two accounts of one provider appear as two pools.
+* **Settings.** The theme choice is stored (the database holds `"appearance":"dark"`) and restored. **Defect found and fixed:** the seven tabs were folded into an overflow menu at the window's width, so they are now a segmented control.
+* **Notification permission.** The flow was exercised for real: macOS answered the first request with a denial, the settings tab showed "Turned off in System Settings > Notifications", the test button reported "Notifications are turned off for this app", and an "Open Notification Settings" button appeared.
+* **Launch at login.** Enabled and verified (above).
+* **Restart and crash.** Quit with ⌘Q (clean-shutdown marker 1), relaunch (one instance, 91,866 requests). `kill -9`, relaunch: integrity check ok, no foreign-key violations, no duplicate requests, collection continued.
+* **No network sockets**, again.
+* **Claude quota path, without touching your settings.** `ccu statusline-check` installed the helper into a copy of the real `settings.json` (no status line is configured today): one line differs, uninstalling restores the file byte for byte, the exact command ran with a made-up payload, and the output and the parsed values were correct. The payload layout was checked against Claude Code's current documentation (`rate_limits.five_hour` and `seven_day`, `used_percentage`, `resets_at` in epoch seconds, absent before the first response, a window dropped once its reset passes, the status line run again when a window reaches its reset time).
+
+**Not verified, and why**
+
+* **A delivered notification.** macOS recorded a denial for the app. The app should not change your privacy settings. To finish this, turn on System Settings → Notifications → AI Usage Monitor, then press "Send a test notification" in Settings → Notifications.
+* **A live `rate_limits` payload from your subscription.** The helper is not installed in your Claude Code settings, and installing it changes your configuration. To finish this, use Settings → Quota → Install helper…, start a new terminal Claude Code session and send one message. Quota is then reported for the first time. **Live Claude quota is therefore not verified.**
+* **Sleep and wake, a reboot, and an actual login start.** The wake path (reconcile on `didWakeNotification`) is covered by the missed-events test, but a real sleep was not performed.
+* **Light and dark appearance of the real window, and real screenshots.** The theme setting works, but without permission to capture the screen the appearance could not be looked at. The README images are rendered by the app's own offscreen renderer from synthetic demo data. Offscreen rendering draws the sidebar of the dashboard as an empty panel; the real window shows it.
+* **Empty, loading and error states in the real window.** Covered by the state tests and the offscreen renders only.
+* **A multi-day soak.** The accelerated run is not one.

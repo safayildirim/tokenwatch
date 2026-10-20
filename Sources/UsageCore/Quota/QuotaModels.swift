@@ -209,10 +209,23 @@ public enum QuotaEvaluator {
         // A reading whose window is still open beats any whose window has closed, because a newer
         // window's report must not be hidden behind an older one that happens to be more recent.
         let open = eligible.filter { ($0.resetsAt ?? .distantFuture) > now }
-        let chosen = (open.isEmpty ? eligible : open).max {
+        var chosen = (open.isEmpty ? eligible : open).max {
             ($0.observedAt, $0.utilizationPercent) < ($1.observedAt, $1.utilizationPercent)
         }!
-        let freshness = policy.freshness(age: max(0, now.timeIntervalSince(chosen.observedAt)))
+        // Within one cycle the utilization only grows. Two sessions that run at the same time can deliver their
+        // readings out of order, so a lower value that arrives a few seconds later belongs to a response that
+        // started earlier. The highest value of the cycle is the one that reflects the account's state.
+        if let cycle = chosen.cycleID {
+            let sameCycle = eligible.filter { $0.cycleID == cycle && $0.authority == chosen.authority }
+            if let highest = sameCycle.max(by: { ($0.utilizationPercent, $0.observedAt) < ($1.utilizationPercent, $1.observedAt) }),
+               highest.utilizationPercent > chosen.utilizationPercent {
+                chosen = highest
+            }
+        }
+        // A reading that is dated later than the current time means that the clock was moved back since it was taken. How
+        // old it really is cannot be known, so it is treated as stale instead of as brand new.
+        let age = now.timeIntervalSince(chosen.observedAt)
+        let freshness = age < -QuotaStaleness.futureSkew ? QuotaFreshness.stale : policy.freshness(age: max(0, age))
         if let reset = chosen.resetsAt, reset <= now {
             return state(chosen, .windowElapsed(resetAt: reset), freshness)
         }

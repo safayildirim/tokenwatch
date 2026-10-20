@@ -15,7 +15,7 @@ The first version modelled Claude Code directly. Auditing it before adding OpenA
 | Quota windows were an enum (`five_hour`, `seven_day`, `spend_limit`), keyed by provider only | A different provider has different windows (a daily one, a monthly one, a plan with only a weekly window). Two accounts of one provider would collide. | **Quota pool** (per account) → **window** (identified by its length, such as `300m`) → **cycle** (one period between resets) → **snapshot**. Windows are dynamic. |
 | Quota percentages came from one hard-coded reader | The OpenAI percentages arrive inside session files, not from a helper. | Observations are stored through one path regardless of origin. Two entry points: a `QuotaFeed` (files a helper writes) or an adapter that emits snapshots with the usage it reads. |
 | Alerts were keyed by window kind and reset time | Two accounts, two pools or two products sharing a pool must not share or hide alerts. | Alert identity is **account, pool, window and cycle**. |
-| Prices were keyed by model only | The same model id can exist for two providers. | Rate cards are per provider. Only Anthropic prices ship. OpenAI usage is shown as unpriced until the user supplies a published price. |
+| Prices were keyed by model only | The same model id can exist for two providers. | Rate cards are per provider and dated. Anthropic and OpenAI prices ship (see [TOKEN-ACCOUNTING](TOKEN-ACCOUNTING.md#openai-prices)). A model with no card stays unpriced. |
 | Menu bar modes were Claude-specific | Needs a per-provider choice. | `MenuBarDisplayMode.quota(provider)`, plus all providers, highest utilization, active sessions, icon only. |
 | Analytics could not filter by provider, product, account or surface | | `UsageFilter` has all four, and the dashboard has a scope bar that applies to every page. |
 
@@ -79,7 +79,7 @@ Conclusions:
 2. **Quota is in the log.** Each response carries the account's `rate_limits`, so no helper needs installing. The figures are snapshots written when a response completes, so they are marked stale between responses.
 3. **A window is identified by its length**, never by whether Codex calls it primary or secondary, because a plan may have only a weekly window.
 4. **ChatGPT Chat is not observable** and is shown as such, with its own pool that never receives a figure.
-5. **No model price list is shipped for OpenAI.** The values could not be verified offline, so OpenAI usage is shown as unpriced until the user adds a published price (Settings → Cost → Add a price).
+5. **OpenAI prices are built in for the models whose prices OpenAI publishes** (read 2026-10-20). A model OpenAI does not list, such as `codex-auto-review`, is unpriced until the user adds a price (Settings → Cost → Add a price).
 
 ## 5. Logical architecture
 
@@ -141,4 +141,6 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 * **Running:** file events are coalesced for 250 ms, then only the appended bytes are parsed. Quota changes are applied immediately. The user interface is refreshed at most once every two seconds, and only while a window is showing. With every window closed, only cheap state is kept current.
 * **Sleep and wake:** `NSWorkspace.didWakeNotification` triggers a reconciliation and a quota re-read. Time-zone, clock and calendar-day changes trigger a refresh, since bucketing is always computed at query time.
 * **Crash or reboot:** all state is on disk. The next launch resumes from durable checkpoints, runs an integrity check if the previous shutdown was not clean, and replays anything missed. A crash cannot lose or duplicate usage because observations and their checkpoint commit in one transaction and every observation is idempotent.
+* **One collector:** the first copy takes a lock in the data folder, a second copy brings the first forward and exits, and the lock is released by the system when the process ends, however it ends.
+* **Whole-file sources:** a source that must read a file from the top (Codex) commits one file at a time, so an interruption leaves nothing half-counted. What it could not settle exactly is saved as accounting notes that replace the file's previous ones.
 * **Failure containment:** each source adapter and each file has its own error boundary. A failure is recorded with a message, retried with exponential backoff (5 s doubling to 15 min, with jitter), and surfaced in Diagnostics. Other sources continue.

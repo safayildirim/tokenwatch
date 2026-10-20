@@ -5,15 +5,15 @@ A native macOS menu bar app that watches your AI coding usage in the background,
 * **Local-first.** No network access. Only usage metadata is stored: token counts, model names, timestamps, project folder names, session ids. Never prompts, replies, file contents, environment variables or credentials.
 * **Exact.** Token totals match an independent recount of the original files to the token (see [VALIDATION](docs/VALIDATION.md)). Streaming snapshots, replays after compaction and forked sub-agents are deduplicated, so cache tokens are not counted two to three times over.
 * **Honest about quota.** Percentages come only from the provider's own reports (Claude's `rate_limits`, Codex's `rate_limits` snapshots). They are never derived from token counts, they belong to one pool of one account, and pools are never added together. When nothing has been reported, the app says "Unavailable". ChatGPT Chat and Claude chat cannot be observed, and the app says that too.
-* **Light.** About 66 MB resident and effectively 0 % CPU when idle. A 5.7 GB history (Claude and Codex) imports in about 7 seconds.
+* **Light.** About 75 MB resident and well under 1 % CPU when idle. A 5.8 GB history (Claude and Codex) imports in about 8 seconds. (With the dashboard open beside a streaming session, about 1 % CPU.)
 
 | Menu bar popover | Dashboard overview |
 |---|---|
 | <img src="docs/images/menubar-popover.png" width="300"> | <img src="docs/images/dashboard-overview.png" width="640"> |
 
-More views: [usage trends](docs/images/dashboard-trends.png), [session explorer](docs/images/dashboard-sessions.png), [session detail](docs/images/session-detail.png), [models](docs/images/dashboard-models.png), [dark mode](docs/images/dashboard-overview-dark.png).
+More views: [quota](docs/images/dashboard-quota.png), [cost](docs/images/dashboard-cost.png), [providers and capability matrix](docs/images/dashboard-providers.png), [usage trends](docs/images/dashboard-trends.png), [session explorer](docs/images/dashboard-sessions.png), [session detail](docs/images/session-detail.png), [models](docs/images/dashboard-models.png), [diagnostics](docs/images/dashboard-diagnostics.png), dark mode ([dashboard](docs/images/dashboard-overview-dark.png), [popover](docs/images/menubar-popover-dark.png)).
 
-*The screenshots in `docs/images` predate the multi-provider interface and show Claude only; they use synthetic demo data (`scripts/make-demo-data.py`), including an illustrative quota reading, so nothing in them is anyone's real usage.*
+*The screenshots in `docs/images` show both providers. They are drawn by the app's own offscreen renderer (`ClaudeUsageMonitor --snapshots DIR`) from synthetic demo data (`scripts/make-demo-data.py`), including an illustrative Claude quota reading, so nothing in them is anyone's real usage. They are not captures of a screen, and the renderer draws the dashboard's sidebar as an empty panel, which the real window does not.*
 
 ## Requirements
 
@@ -36,10 +36,10 @@ This is a menu bar app with no Dock icon, so look for the ✦ icon at the top ri
 Pick one:
 
 1. **In the app:** Settings → General → *Launch at login* (uses `SMAppService`). macOS may ask you to approve it in System Settings → General → Login Items. The app should be installed in `/Applications` or `~/Applications`.
-2. **From a terminal:** `"/Applications/AI Usage Monitor.app/Contents/MacOS/ClaudeUsageMonitor" --login-item enable` (also `disable` and `status`).
+2. **From a terminal:** `"/Applications/AI Usage Monitor.app/Contents/MacOS/ClaudeUsageMonitor" --login-item enable` (also `disable` and `status`). This registers the app with macOS exactly as the Settings switch does. Use only one of the three ways.
 3. **LaunchAgent**, which also restarts the app if it ever crashes: `scripts/install-launchagent.sh` (remove with `--remove`).
 
-The app needs no terminal and no open window to keep collecting.
+The app needs no terminal and no open window to keep collecting. Only one copy runs: opening the app again brings the running copy forward, and a second copy started by hand exits immediately, so two collectors can never compete for the database.
 
 ## Using it
 
@@ -77,7 +77,7 @@ Details, limits and manual setup: [QUOTA](docs/QUOTA.md). Quota can only be repo
 
 ### Notifications
 
-Optional, off by default (Settings → Notifications). Thresholds for each window, reset, stale-data and collection-failure alerts. Each is delivered once; none ever uses a token-based estimate.
+Optional, off by default (Settings → Notifications). Thresholds for each window, reset, stale-data and collection-failure alerts. Each is delivered once; none ever uses a token-based estimate. macOS has to allow them: the settings page shows the permission, a **test notification** that has nothing to do with any quota checks delivery, and if macOS refuses (or notifications are turned off for the app) the page says so and offers to open System Settings, instead of failing silently.
 
 ### Export
 
@@ -98,6 +98,7 @@ ccu verify                 # recount every token from the original files with di
 ccu cost-check             # estimated cost vs the cost Claude Code recorded
 ccu sessions --limit 10
 ccu quota
+ccu statusline-check       # rehearse the Claude quota helper on a copy of your settings; changes nothing
 ccu export --kind requests --format csv --out requests.csv
 ccu bench                  # import into a scratch database and time it
 ```
@@ -110,7 +111,7 @@ Use `--db PATH`, `--root PATH` (Claude) and `--codex-home PATH` (Codex) to work 
 swift test
 ```
 
-254 tests: token accounting and deduplication for both providers, Codex file shapes (event, usage-record, fork, compacted, compressed, damaged, archived), OpenAI quota (pools, windows, cycles, freshness, out-of-order, shared pool), alert identity, provider isolation and a made-up third provider through the whole pipeline, session discovery (including real FSEvents), persistence and concurrency, calendar and DST boundaries, cost, export, privacy, the app's state machine, and offscreen rendering of every page in light and dark. Results and what each group proves: [VALIDATION](docs/VALIDATION.md).
+307 tests: token accounting and deduplication for both providers, Codex file shapes (event, usage-record, fork, compacted, compressed, damaged, archived), OpenAI quota (pools, windows, cycles, freshness, out-of-order, shared pool), alert identity, provider isolation and a made-up third provider through the whole pipeline, session discovery (including real FSEvents), persistence and concurrency, calendar and DST boundaries, cost, OpenAI prices, quota freshness under replays and restarts, Codex forks and mixed file formats, an accelerated run of weeks of use, notification delivery, single-instance start-up, export, privacy, the app's state machine, and offscreen rendering of every page in light and dark. Results and what each group proves: [VALIDATION](docs/VALIDATION.md).
 
 ## Privacy and security
 
@@ -131,20 +132,52 @@ swift test
 * [Performance measurements](docs/PERFORMANCE.md)
 * [Validation and test results](docs/VALIDATION.md)
 
+## What each provider reports
+
+| | Claude Code | Codex, Codex Desktop, ChatGPT Work | Claude chat, Cowork | ChatGPT chat |
+|---|---|---|---|---|
+| Per-request tokens | Yes (transcripts) | Yes (session files) | Not observable | Not observable |
+| Cache read and write | Yes, with the 5-minute and 1-hour split | Cached input yes, writes always zero so far | | |
+| Reasoning tokens | Not reported | Yes, a part of output | | |
+| Quota percentage | Yes, **only** through the status line helper and only in a terminal session | Yes, in every session file, no setup | Counts toward the Claude allowance, not observable | Own limits, not observable |
+| Reset times | Yes (same source) | Yes | | |
+| Accounts | One pool (Claude Code's status line names no account) | One pool per account, from the file header. Older files have none, so they form the unassigned account | | |
+| Live process state | Yes (process registry) | No, status is inferred and labelled so | | |
+| Own cost figure | Claude Code's per-session summary, shown beside the estimate | No | | |
+| Prices built in | Yes (Anthropic list prices) | Yes, for the models OpenAI publishes, with dates (see below) | | |
+
+The Providers page shows the same matrix per data source, with its health.
+
+### Prices and what the cost figures mean
+
+Costs are **API-equivalent estimates**: what the same tokens would cost at pay-as-you-go list prices. They are not what a Claude or ChatGPT subscription charges, and the cost page says so. Every price card is **published** (by the provider, with its start date), **derived** (the price before a cut that was announced only as a percentage, worked out from the published price after it) or **yours** (typed in Settings → Cost), and the cost page says how many tokens used each kind. A model with no card is **unpriced** and the figure becomes a lower bound ("$39.94+"); no price is ever borrowed from a similarly named model. OpenAI coverage on this Mac (read from OpenAI's pricing page and changelog on 2026-10-20): `gpt-5.5`, `gpt-5.6-sol`, `-terra`, `-luna`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol` are priced, with long-context (above 272,000 prompt tokens), `fast` and `flex` tiers; **`codex-auto-review` is unpriced** because OpenAI does not list it (291 requests, 1.3 % of the tokens). The table is in [TOKEN-ACCOUNTING](docs/TOKEN-ACCOUNTING.md#openai-prices).
+
+### Quota freshness
+
+A quota reading is exactly as old as the moment it was taken. Reading a file again, restarting, copying or archiving a file, or rebuilding the database never makes it fresher, because the app stores no ingestion time for quota at all. A window that has reset is shown as unknown, never as 0 %. Details and tests: [QUOTA](docs/QUOTA.md#freshness-guarantees).
+
+### Codex accounting, confirmed and not
+
+Verified against Codex's own running counters, not only against a second count of the same figures: six threads that Codex's own totals understate by 780,795 tokens are real usage (compaction requests and last responses that have a usage record and no event), and the one fork is a copy of its parent, so it counts nothing. A fork is recognized by what its lines say, not by a time window, and without its parent's file the fallback is flagged in Diagnostics. See [OPENAI-CODEX](docs/OPENAI-CODEX.md).
+
 ## Known limitations
 
-* **Only coding tools are observable.** claude.ai chat, Cowork, Claude Desktop chat, ChatGPT Chat and other devices consume quota but leave no local record. Local token totals can therefore be lower than your real consumption, and the dashboard says so.
-* **Quota needs the status line helper, and a terminal session.** VS Code and Desktop Code sessions do not run the status line, so quota refreshes only while the terminal CLI is in use; otherwise the last value is shown as stale.
-* **The quota feed has not been exercised against a live subscription session in this build.** The helper, the evaluator and the coordinator are tested end to end with realistic documented input, but the live `rate_limits` payload from your account is unverified until you install the helper and run a terminal session.
-* **Session status is inferred** for sessions with no running process (finished ones, and history). It is labelled as such.
-* **No per-session quota attribution.** It is not possible, and the app does not fake it.
-* **Costs are list-price estimates**, not charges. Only Anthropic prices ship. OpenAI usage is shown as unpriced until you add a published price under Settings → Cost, because those prices could not be verified from this Mac.
-* **Codex's snapshot format is alpha** (`0.162.0-alpha`). The parser is tolerant, but a future change of shape could need an update.
-* **Codex sessions without an account id** (older files) belong to an explicit "unassigned" account and are not guessed into another.
-* **Cost and token volume are not comparable across providers.** Tokenizers differ, so the dashboard shows providers side by side and never adds them.
-* **A file rewritten in place in the middle** (not its first 4 KB, not appended, same inode, not shorter) is not detected until rebuilt. Claude Code only appends, so this is not expected.
-* **Ad-hoc signing.** The app runs locally; to distribute it, sign with a Developer ID and notarize.
-* **Parent/child session lineage across resumed sessions** is not recorded by Claude Code in a way the app can read, so sessions have no parent link. Sub-agents are attributed to their parent session.
+Ordered by how much they can matter to you.
+
+1. **Claude quota has not been seen from a live subscription.** The helper is not installed in your Claude Code settings. The helper, evaluator and coordinator are tested end to end and `ccu statusline-check` rehearses the whole path on a copy of your settings, but until you install the helper and send one message in a terminal Claude Code session, the Claude quota stays "Unavailable". It is only reported while a terminal session is in use (VS Code and Desktop Code sessions do not run the status line), and only for subscribers.
+2. **Notifications are not verified as delivered.** macOS recorded a denial for the app on this Mac. The flow reports it correctly. Allow the app in System Settings → Notifications, then use the test button.
+3. **Only coding tools are observable.** claude.ai chat, Cowork, Claude Desktop chat, ChatGPT Chat and other devices consume quota but leave no local record. Local token totals can therefore be lower than your real consumption, and the dashboard says so.
+4. **Two accounts of one provider that the files do not name** (Claude always, Codex files written before an account id existed) share one pool. Their readings are kept as separate cycles when their reset times differ by more than 30 seconds, and nothing else can separate them.
+5. **The menu bar icon can be hidden by macOS.** On a Mac with a notch and a full menu bar, the icon can land under the notch. The app detects it and offers a Dock icon, but it cannot move the icon. This is the case on the Mac this was developed on.
+6. **Codex's file format is alpha** (`0.162.0-alpha`). The parser is tolerant, and a line that should report usage but does not look right is reported in Diagnostics instead of counting as nothing, but a future change of shape could need an update. A fork whose parent's file is not on the Mac is accounted by time and flagged.
+7. **A custom `$CODEX_HOME`** is read at start-up. A GUI app does not inherit a shell's environment, so it needs `launchctl setenv CODEX_HOME …` and a restart.
+8. **Costs are list-price estimates**, not charges. The three price cards before the cuts of GPT-5.6 Luna, Terra and Sol are derived, and the GPT-5.6 Sol price is promotional (announced through 2026-11-21, so usage after that date is priced as if it continued). Prices change, and a new card is needed when they do.
+9. **Session status is inferred** for sessions with no running process, and is labelled as such. **No per-session quota attribution** is possible, and the app does not fake it.
+10. **Cost and token volume are not comparable across providers.** Tokenizers differ, so providers are shown side by side and never added.
+11. **Sleep, reboot and a real start at login were not performed**, and the app has not run for days. The accelerated reliability test is not a substitute.
+12. **A file rewritten in place in the middle** (not its first 4 KB, not appended, same inode, not shorter) is not detected until rebuilt. Claude Code only appends.
+13. **Ad-hoc signing.** The app runs locally. To distribute it, sign with a Developer ID and notarize. If the app is moved or deleted while the Claude status line helper is installed, the status line command fails until the helper is uninstalled.
+14. **Parent/child lineage across resumed Claude sessions** is not recorded by Claude Code in a way the app can read. Sub-agents are attributed to their parent session.
 
 ## Possible future enhancements
 

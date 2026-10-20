@@ -6,19 +6,39 @@ import UsageCore
 
 public struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @State private var tab = Tab.general
     public init() {}
 
+    private enum Tab: String, CaseIterable, Identifiable {
+        case general = "General", quota = "Quota", notifications = "Notifications", data = "Data", export = "Export", cost = "Cost", about = "About"
+        var id: String { rawValue }
+    }
+
+    /// The pages are chosen with a segmented control instead of a tab view. A tab view puts its tabs into the window's
+    /// toolbar, and at this window's width macOS folded all seven into an overflow menu that is easy to miss.
     public var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            QuotaSettings().tabItem { Label("Quota", systemImage: "hourglass") }
-            NotificationSettingsView().tabItem { Label("Notifications", systemImage: "bell") }
-            DataSettings().tabItem { Label("Data", systemImage: "externaldrive") }
-            ExportSettings().tabItem { Label("Export", systemImage: "square.and.arrow.up") }
-            CostSettings().tabItem { Label("Cost", systemImage: "dollarsign.circle") }
-            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
+        VStack(spacing: 0) {
+            Picker("Settings page", selection: $tab) {
+                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            Divider()
+            Group {
+                switch tab {
+                case .general: GeneralSettings()
+                case .quota: QuotaSettings()
+                case .notifications: NotificationSettingsView()
+                case .data: DataSettings()
+                case .export: ExportSettings()
+                case .cost: CostSettings()
+                case .about: AboutSettings()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 600, height: 520)
+        .frame(width: 640, height: 560)
         .preferredColorScheme(model.settings.appearance.colorScheme)
         .onAppear { DockPresence.windowAppeared() }
         .onDisappear { DockPresence.windowDisappeared() }
@@ -130,14 +150,25 @@ private struct NotificationSettingsView: View {
                 Toggle("Quota data becomes stale while its provider's tools are in use", isOn: bind(\.notifyOnStaleData)).disabled(!n.enabled)
                 Toggle("Usage collection keeps failing", isOn: bind(\.notifyOnCollectionFailure)).disabled(!n.enabled)
             }
-            Section {
-                Button("Send a test notification") {
-                    NotificationDelivery.requestAuthorization()
-                    NotificationDelivery.deliver([AlertNotification(key: "test-\(UUID().uuidString)", kind: .threshold, title: "AI Usage", body: "Notifications are working.")])
-                }.disabled(!n.enabled)
+            Section("Delivery") {
+                LabeledContent("macOS permission", value: model.notificationPermission.description)
+                HStack {
+                    Button("Send a test notification") { Task { await model.sendTestNotification() } }
+                    if model.notificationPermission == .denied {
+                        Button("Open Notification Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) }
+                        }
+                    }
+                }
+                if let problem = model.notificationProblem {
+                    Label(problem, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                } else if model.notificationPermission == .allowed {
+                    Text("The test is not tied to any quota. It only checks that macOS shows the app's notifications.").font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)
+        .task { await model.refreshNotificationPermission() }
         .onAppear {
             short = n.shortWindowThresholds.map(String.init).joined(separator: ", ")
             long = n.longWindowThresholds.map(String.init).joined(separator: ", ")
@@ -296,7 +327,7 @@ private struct CostSettings: View {
                 Text("Use the published price of the model. Reasoning tokens are part of output and are priced as output. A price you add applies to all usage of that model, past and future, and replaces any built-in price with the same date.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Price cards (US$ per million tokens, built-in cards as of \(PricingCatalog.asOf))") {
+            Section("Price cards (US$ per million tokens; \(PricingCatalog.asOfSummary))") {
                 Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 3) {
                     GridRow { Text("Model").gridColumnAlignment(.leading); Text("Provider").gridColumnAlignment(.leading); Text("Input"); Text("Output"); Text("Cache read"); Text("Write 5m"); Text("Write 1h") }.font(.caption.bold())
                     ForEach(Array(rates.enumerated()), id: \.offset) { _, r in
@@ -307,6 +338,13 @@ private struct CostSettings: View {
         }
         .formStyle(.grouped)
         .task(id: model.dataVersion) { await load() }
+    }
+
+    private static func day(_ ms: Int64) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
     }
 
     private func save() {
@@ -329,13 +367,20 @@ private struct CostSettings: View {
             try db.read { c in
                 let cards = try c.query("""
                     SELECT model_key, provider_id, speed, prompt_min, prompt_max, input_micros_per_mtok, output_micros_per_mtok,
-                           cache_read_micros_per_mtok, cache_5m_micros_per_mtok, cache_1h_micros_per_mtok
-                    FROM price_rate ORDER BY provider_id, model_key, speed, prompt_min
+                           cache_read_micros_per_mtok, cache_5m_micros_per_mtok, cache_1h_micros_per_mtok, effective_from, origin
+                    FROM price_rate ORDER BY provider_id, model_key, speed, prompt_min, effective_from
                     """) { r -> (String, String, String, String, String, String, String) in
                     func usd(_ i: Int32) -> String { String(format: "%g", Double(r.int(i)) / 1_000_000) }
                     var name = r.text(0)
                     if r.text(2) != "standard" { name += " (\(r.text(2)))" }
                     if r.int(3) > 0 || r.intOrNil(4) != nil { name += r.intOrNil(4) == nil ? " (> \(Fmt.tokens(r.int(3) - 1)))" : " (≤ \(Fmt.tokens(r.int(4) - 1)))" }
+                    // A card that starts later than the epoch says from when it applies, and where its price comes from.
+                    if r.int(10) > 0 { name += " from " + Self.day(r.int(10)) }
+                    switch r.text(11) {
+                    case "derived": name += " · derived"
+                    case "user": name += " · yours"
+                    default: break
+                    }
                     return (name, r.text(1), usd(5), usd(6), usd(7), usd(8), usd(9))
                 }
                 let missing = try c.query("""

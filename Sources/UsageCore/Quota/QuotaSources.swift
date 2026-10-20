@@ -63,6 +63,11 @@ public struct QuotaBridgeFile: Codable, Sendable, Equatable {
     }
 }
 
+/// How far into the future a quota reading may be dated before it is rejected as a clock error.
+enum QuotaStaleness {
+    static let futureSkew: TimeInterval = 5 * 60
+}
+
 /// The quota pool that Claude Code's rate limits belong to.
 public enum ClaudeQuota {
     public static let poolKey = "claude-subscription"
@@ -100,6 +105,9 @@ public enum StatusLineQuotaSource {
             let observed = Clock.date(ms: file.observedAt)
             // Files from long-dead sessions are cleaned up so that the folder does not grow forever.
             if now.timeIntervalSince(observed) > 14 * 86400 { try? fm.removeItem(at: url); continue }
+            // A reading dated in the future comes from a clock that was wrong when it was written. It would look fresh
+            // for as long as the clock stays ahead, so it is not an observation.
+            if observed.timeIntervalSince(now) > QuotaStaleness.futureSkew { continue }
             for (key, window) in file.rateLimits {
                 guard let mapped = ClaudeQuota.window(named: key), window.usedPercentage.isFinite, window.usedPercentage >= 0 else { continue }
                 out.append(ClaudeQuota.observation(
@@ -126,6 +134,7 @@ public enum DesktopPlanUsageSource {
               let t = (latest["t"] as? NSNumber)?.int64Value,
               let usage = latest["u"] as? [String: Any] else { return [] }
         let observed = Clock.date(ms: t)
+        if observed.timeIntervalSinceNow > QuotaStaleness.futureSkew { return [] }
         var out: [QuotaObservation] = []
         for (field, name) in [("fh", "five_hour"), ("sd", "seven_day")] {
             if let value = (usage[field] as? NSNumber)?.doubleValue, value.isFinite, value >= 0, let mapped = ClaudeQuota.window(named: name) {

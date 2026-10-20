@@ -237,7 +237,8 @@ final class BridgeBinaryTests: XCTestCase {
         XCTAssertFalse(text.contains("secret-project"), "the working directory is never stored")
         XCTAssertFalse(text.contains("transcript"), "the transcript path is never stored")
         XCTAssertFalse(text.contains("claude-opus"), "the model is not stored")
-        let readings = StatusLineQuotaSource.observations(in: dir, now: Date(timeIntervalSince1970: 1_790_000_000))
+        // The helper dates the reading with the real current time, so the reading is evaluated at the current time too.
+        let readings = StatusLineQuotaSource.observations(in: dir, now: Date())
         XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.utilizationPercent, 23.5)
         XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.resetsAt, Date(timeIntervalSince1970: 1_893_456_000))
         // Files are private to the user.

@@ -168,7 +168,7 @@ struct ModelsPage: View {
                 }
                 .frame(height: CGFloat(rows.count) * 28 + 60)
                 if model.settings.showEstimatedCost {
-                    Text("Costs are estimates at published API list prices (as of \(PricingCatalog.asOf)). A model without a price card is shown as unpriced instead of being guessed.")
+                    Text("Costs are API-equivalent estimates at published list prices (\(PricingCatalog.asOfSummary)), not subscription charges. A model without a price card is shown as unpriced instead of being guessed.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

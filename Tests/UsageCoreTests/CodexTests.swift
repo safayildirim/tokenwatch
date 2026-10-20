@@ -250,7 +250,10 @@ final class CodexAccountingTests: XCTestCase {
 
     func testUnknownModelIsKeptHonestlyAndIsNotPriced() throws {
         let env = try TestEnv()
-        try env.codexFile(session: CF.sessionA, lines: CF.eventSession(count: 2))
+        // The default fixture model has a published price. This one is not on OpenAI's list.
+        var lines = CF.eventSession(count: 2)
+        lines[1] = CF.turnContext(ordinal: 1, at: t0 + 100, model: "gpt-9-not-on-any-list")
+        try env.codexFile(session: CF.sessionA, lines: lines)
         try env.syncCodex()
         let t = try env.totals()
         XCTAssertEqual(t.cost.picoUSD, 0)
@@ -342,22 +345,14 @@ final class CodexSessionTests: XCTestCase {
 
     func testAForkDoesNotRecountItsParentsHistory() throws {
         let env = try TestEnv()
-        let parentLines = CF.eventSession(id: CF.sessionA, count: 3)
-        try env.codexFile(session: CF.sessionA, lines: parentLines)
-        // The fork replays the parent's events in a burst at the instant it was created, with that instant as the
+        try env.codexFile(session: CF.sessionA, lines: CF.eventSession(id: CF.sessionA, count: 3))
+        // The fork repeats the parent's events in a burst at the instant it was created, with that instant as the
         // timestamp, and then continues with one response of its own.
         let forkAt = t0 + 600_000
-        let each = CF.Usage(input: 1000, cached: 600, output: 50, reasoning: 20)
-        var lines = [CF.header(id: CF.sessionB, at: forkAt, forkedFrom: CF.sessionA)]
-        var total = CF.Usage(input: 0, output: 0)
-        for i in 0..<3 {
-            total = total + each
-            lines.append(CF.tokenCount(ordinal: 1 + i, at: forkAt + 43, last: each, total: total,
-                                       rate: CF.rateLimits(primary: (99, 300, 1_790_010_000), secondary: (99, 10080, 1_790_500_000))))
-        }
         let own = CF.Usage(input: 700, cached: 100, output: 30)
-        lines.append(CF.tokenCount(ordinal: 9, at: forkAt + 20_000, last: own, total: total + own))
-        try env.codexFile(session: CF.sessionB, lines: lines)
+        try env.codexFile(session: CF.sessionB, lines: CF.forkOfEventSession(
+            id: CF.sessionB, parent: CF.sessionA, parentCount: 3, at: forkAt, own: [own],
+            rate: CF.rateLimits(primary: (99, 300, 1_790_010_000), secondary: (99, 10080, 1_790_500_000))))
         try env.syncCodex()
         let fork = try XCTUnwrap(AnalyticsEngine(db: env.db).sessionRows().first { $0.externalID == CF.sessionB })
         XCTAssertEqual(fork.requests, 1, "only the fork's own response is counted")
@@ -365,8 +360,8 @@ final class CodexSessionTests: XCTestCase {
         XCTAssertEqual(try env.totals().requests, 4)
         XCTAssertEqual(fork.compactionCount(in: env.db), 0)
         // The copied snapshots carried 99% with the time of the copy. That must not be taken for a current reading.
-        let highest = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot WHERE utilization_pct >= 99") }
-        XCTAssertEqual(highest, 0)
+        let copies = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot WHERE utilization_pct >= 99 AND last_confirmed_at < ?", [.int(forkAt + 10_000)]) }
+        XCTAssertEqual(copies, 0)
     }
 }
 
@@ -753,17 +748,9 @@ final class CodexVerifierTests: XCTestCase {
         try FileManager.default.createDirectory(at: env.codexHome.appendingPathComponent("sessions/2026/10/13"), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: fixtureURL("era2-usage-record.jsonl"),
                                          to: env.codexHome.appendingPathComponent("sessions/2026/10/13/rollout-2026-10-13T09-00-00-01a00000-0000-7000-8000-0000000000f2.jsonl"))
-        let each = CF.Usage(input: 1000, cached: 600, output: 50, reasoning: 20)
         let forkAt = t0 + 600_000
-        var fork = [CF.header(id: CF.sessionB, at: forkAt, forkedFrom: CF.sessionA)]
-        var total = CF.Usage(input: 0, output: 0)
-        for i in 0..<3 {
-            total = total + each
-            fork.append(CF.tokenCount(ordinal: 1 + i, at: forkAt + 43, last: each, total: total))
-        }
         let own = CF.Usage(input: 700, cached: 100, output: 30)
-        fork.append(CF.tokenCount(ordinal: 9, at: forkAt + 20_000, last: own, total: total + own))
-        try env.codexFile(session: CF.sessionB, lines: fork)
+        try env.codexFile(session: CF.sessionB, lines: CF.forkOfEventSession(id: CF.sessionB, parent: CF.sessionA, parentCount: 3, at: forkAt, own: [own]))
         let a = CF.Usage(input: 1000, cached: 500, output: 40, reasoning: 10)
         let b = CF.Usage(input: 2000, cached: 1500, output: 60, reasoning: 5)
         let missing = CF.Usage(input: 1200, cached: 1000, output: 30, reasoning: 8)

@@ -222,7 +222,7 @@ public struct FileSynchronizer: Sendable {
                 fileID: fileID, device: device, inode: inode, size: compressed ? size : max(size, bufOffset), mtimeMs: mtimeMs,
                 consumedOffset: bufOffset, headLen: headLen, headHash: newHeadHash,
                 addedLines: batch.lineCount, addedMalformed: malformedSinceCommit,
-                status: "ok", lastError: nil)
+                status: "ok", lastError: nil, replacesNotices: readsWholeFile)
             let stats = try IngestWriter.apply(batch: batch, checkpoint: update,
                                                retentionFloorMs: retentionFloorMs(), db: db)
             result.requestsTouched += stats.requestsTouched
@@ -294,7 +294,9 @@ public struct FileSynchronizer: Sendable {
                 discardingOversizedLine = true
             }
             progress?(result.bytesRead)
-            if bufOffset - committedOffset >= Int64(Self.commitBytes) { try commit(final: false) }
+            // A file that is always read from its start has no durable progress to save along the way, and what it
+            // reports is only complete once all of it has been read, so it is committed once, at the end.
+            if !readsWholeFile, bufOffset - committedOffset >= Int64(Self.commitBytes) { try commit(final: false) }
         }
         try commit(final: true)
         if result.bytesRead == 0 && !rebuilt && existing != nil { result.outcome = .unchanged }

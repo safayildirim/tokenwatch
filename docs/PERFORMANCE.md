@@ -98,3 +98,28 @@ database_size_mb=36.7
 * The Codex import includes decompressing 212 files. Compressed files are immutable and read once. Plain files that grow are read again from their start, which is cheap at these sizes (the largest active session is a few megabytes).
 * Installed app, steady state (menu bar only, both providers, database already imported): about **78 MB resident and 0 % CPU**, no network sockets. Immediately after the very first import the process can hold about 180 MB until it settles, because the allocator keeps freed pages.
 * Query latency on the combined database: overview, session table, series and breakdowns each about 100 to 170 ms.
+
+
+## Stabilization check (2026-10-20)
+
+Same machine and release build, measured against the same baseline. **The machine was heavily loaded by other applications throughout** (load average 10 to 32 on 10 cores, which a quiet measurement session would not have), so times are pessimistic and the comparison is a regression check, not a new benchmark. History: Claude 795 files (4.93 GB), Codex 232 files (862 MB), 92,000 requests.
+
+| Metric | Baseline above | Measured now | Verdict |
+|---|---|---|---|
+| Import, Claude | 5.8 to 5.9 s, 4.83 GB | 6.4 s and 7.2 s, 4.93 GB (about 690 to 770 MB/s, was 820 to 840) | Within the noise of the load. Not investigated |
+| Import, Codex | 1.44 s | 1.55 s and 1.64 s | Same |
+| Peak memory of an import | 28 to 31 MB (Claude), 48 MB (Codex) | 29.5 to 30 MB, 44.6 to 49.4 MB | Same |
+| No-change reconcile | 0.06 s and 0.01 s | 0.07 to 0.08 s and 0.01 s | Same |
+| Query latency | 100 to 195 ms | 186 to 227 ms, session detail 107 ms | About 20 to 40 % slower under a load average of 12. Not investigated |
+| Live ingestion latency | 0.88 s with 6 sessions | **0.31 s with 9 concurrent sessions** (6 Claude, 3 Codex, 225 requests) | Better |
+| Idle memory, menu bar only | about 78 MB | **73 to 79 MB** after a fresh start, no window ever opened | Same |
+| Idle CPU, menu bar only, while two sessions of this very machine were writing | about 0.25 % | 0.06 % and 0.7 % in two samples | Same order of magnitude |
+| Network sockets | none | none | Same |
+
+### One regression found and fixed: the dashboard window left open
+
+The baseline measured the app with no window. With the dashboard open beside a streaming session, the installed app used **12 % of a core on average and up to 38 %** (sampled for 60 s, 147 MB). Each heavy reload takes about a second on this history, and it ran every four seconds. A heavy reload is now followed by a pause of eight times its own duration, with the old four seconds as the minimum, so the cost can no longer exceed about a tenth of the processor however large the history grows. Measured again with the dashboard open and data still arriving: **1.0 % and 1.5 %** (90 s and 120 s). Memory with the window open is 190 to 210 MB (charts), and it falls back when the window is closed.
+
+### Accelerated reliability run
+
+`AcceleratedSoakTests` runs 45 simulated days in under three seconds through the real collector, database and both adapters: sessions of both formats grow, forks are made, files are compressed with `zstd` and archived the way Codex does, the app is stopped without a clean shutdown and reopened, the Codex folder disappears for a day while Claude Code keeps working, and damaged lines are written. Every total equals what was generated, nothing is stored twice, the integrity check passes and both independent recounts agree. **This is not equivalent to running for days.** A real multi-day soak is a separate pending item.

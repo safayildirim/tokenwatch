@@ -14,6 +14,8 @@ struct CheckpointUpdate {
     var addedMalformed: Int
     var status: String
     var lastError: String?
+    /// True when the batch holds everything the file says, so that its notices replace the ones stored for the file.
+    var replacesNotices = false
 }
 
 struct ApplyStats {
@@ -63,8 +65,9 @@ enum IngestWriter {
                 if let floor = retentionFloorMs, r.requestedAtMs < floor { continue }
                 let provider = db.registry.providerOf(product: r.product) ?? ProviderID(rawValue: "unknown")
                 let modelID = try resolver.model(provider: provider, raw: r.model)
-                let sid = try resolver.ensureSession(product: r.product, externalID: r.sessionExternalID, source: r.source)
-                try upsertRequest(c, r, sessionID: sid, modelID: modelID, fileID: checkpoint?.fileID, now: now)
+                let request = try sameResponseOfSiblingProduct(c, r, provider: provider, registry: db.registry) ?? r
+                let sid = try resolver.ensureSession(product: request.product, externalID: request.sessionExternalID, source: request.source)
+                try upsertRequest(c, request, sessionID: sid, modelID: modelID, fileID: checkpoint?.fileID, now: now)
                 stats.requestsTouched += 1
             }
 
@@ -110,9 +113,36 @@ enum IngestWriter {
                           .int(Int64(cp.headLen)), .text(cp.headHash), .int(Int64(cp.addedLines)),
                           .int(Int64(cp.addedMalformed)), .text(cp.status), .optional(cp.lastError), .int(now),
                           .int(cp.fileID)])
+                if cp.replacesNotices {
+                    try c.run("DELETE FROM ingest_issue WHERE severity = 'notice' AND (source_id, path) = (SELECT source_id, path FROM source_file WHERE id = ?)",
+                              [.int(cp.fileID)])
+                    for notice in batch.notices {
+                        try c.run("INSERT INTO ingest_issue(source_id, path, at, severity, message) SELECT source_id, path, ?, 'notice', ? FROM source_file WHERE id = ?",
+                                  [.int(now), .text(notice), .int(cp.fileID)])
+                    }
+                }
             }
             return stats
         }
+    }
+
+    /// A response id is issued by the provider, so it is the same response whichever of the provider's products shows it.
+    /// A session that one product copied from another, such as a fork opened in a different application, repeats the
+    /// responses of the original, and counting them under both products would count them twice. When a response with
+    /// this id is already stored under a sibling product, the observation is merged into that row.
+    private static func sameResponseOfSiblingProduct(_ c: SQLiteConnection, _ r: RequestObservation, provider: ProviderID,
+                                                     registry: ProviderRegistry) throws -> RequestObservation? {
+        guard let apiID = r.apiRequestID else { return nil }
+        let siblings = registry.products(of: provider).map(\.id).filter { $0 != r.product }
+        guard !siblings.isEmpty else { return nil }
+        let marks = Array(repeating: "?", count: siblings.count).joined(separator: ",")
+        let existing = try c.queryOne("""
+            SELECT product_id FROM model_request WHERE api_request_id = ? AND request_key = ? AND product_id IN (\(marks)) LIMIT 1
+            """, [.text(apiID), .text(r.requestKey)] + siblings.map { .text($0.rawValue) }) { $0.text(0) }
+        guard let existing else { return nil }
+        var merged = r
+        merged.product = ProductID(rawValue: existing)
+        return merged
     }
 
     /// Chooses the telemetry source recorded on a placeholder session, which exists only because a report

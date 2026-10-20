@@ -20,11 +20,13 @@ public struct PriceRate: Sendable, Equatable {
     public var cache5mMicrosPerMTok: Int64
     public var cache1hMicrosPerMTok: Int64
     public var note: String?
+    /// Whether the price was published, or worked out from other published facts. See `PriceBasis`.
+    public var basis: PriceBasis
 
     /// Builds a rate from dollar prices per million tokens.
     public init(provider: ProviderID, model: String, from: Int64 = 0, promptMin: Int64 = 0, promptMax: Int64? = nil, speed: String = "standard",
                 input: Double, output: Double, cacheRead: Double, cache5m: Double? = nil, cache1h: Double? = nil,
-                note: String? = nil) {
+                basis: PriceBasis = .published, note: String? = nil) {
         func micros(_ usd: Double) -> Int64 { Int64((usd * 1_000_000).rounded()) }
         self.provider = provider
         self.modelKey = model
@@ -40,15 +42,25 @@ public struct PriceRate: Sendable, Equatable {
         self.cache5mMicrosPerMTok = micros(cache5m ?? input * 1.25)
         self.cache1hMicrosPerMTok = micros(cache1h ?? input * 2)
         self.note = note
+        self.basis = basis
     }
+}
+
+/// Where a built-in price comes from. A price the user typed in is a third kind, stored with the origin `user`.
+public enum PriceBasis: String, Sendable, Equatable {
+    /// The provider published this price for the period the card covers.
+    case published = "builtin"
+    /// The provider published a price cut as a percentage, not as a new price, so the price before the cut is worked
+    /// out from the price after it. The estimate is labelled accordingly wherever it uses such a card.
+    case derived = "derived"
 }
 
 public enum PricingStore {
     /// A fingerprint of the built-in catalog, so that a changed catalog is reinstalled on the next launch.
     static var catalogFingerprint: String {
-        var text = PricingCatalog.asOf
+        var text = PricingCatalog.asOfSummary
         for r in PricingCatalog.builtin {
-            text += "|\(r.provider.rawValue),\(r.modelKey),\(r.promptMin),\(r.promptMax ?? -1),\(r.speed),\(r.inputMicrosPerMTok),\(r.outputMicrosPerMTok),\(r.cacheReadMicrosPerMTok),\(r.cache5mMicrosPerMTok),\(r.cache1hMicrosPerMTok)"
+            text += "|\(r.basis.rawValue),\(r.effectiveFromMs),\(r.provider.rawValue),\(r.modelKey),\(r.promptMin),\(r.promptMax ?? -1),\(r.speed),\(r.inputMicrosPerMTok),\(r.outputMicrosPerMTok),\(r.cacheReadMicrosPerMTok),\(r.cache5mMicrosPerMTok),\(r.cache1hMicrosPerMTok)"
         }
         return FNV.hash(Array(text.utf8), count: text.utf8.count)
     }
@@ -64,8 +76,8 @@ public enum PricingStore {
     /// rows untouched.
     public static func seedBuiltin(_ db: UsageDatabase) throws {
         try db.write { c in
-            try c.run("DELETE FROM price_rate WHERE origin = 'builtin'")
-            for r in PricingCatalog.builtin { try insert(c, r, origin: "builtin") }
+            try c.run("DELETE FROM price_rate WHERE origin IN ('builtin', 'derived')")
+            for r in PricingCatalog.builtin { try insert(c, r, origin: r.basis.rawValue) }
         }
     }
 
@@ -130,7 +142,7 @@ enum CostSQL {
         """
 
     /// The number of columns that `aggregateColumns` yields.
-    static let aggregateWidth: Int32 = 16
+    static let aggregateWidth: Int32 = 18
 
     /// Column list that yields request count, token sums, cost and coverage, in the order `readAggregate` expects.
     static let aggregateColumns = """
@@ -142,7 +154,9 @@ enum CostSQL {
         COALESCE(sum(\(picoUSD)), 0), COALESCE(sum(\(unpricedTokens)), 0),
         COALESCE(sum(r.uncached_input_tokens IS NULL), 0), COALESCE(sum(r.cache_read_tokens IS NULL), 0),
         COALESCE(sum(r.cache_creation_tokens IS NULL), 0), COALESCE(sum(r.reasoning_output_tokens IS NULL), 0),
-        COALESCE(sum(r.completeness = 'reconciledFromTotals'), 0), COALESCE(sum(r.completeness = 'partial'), 0)
+        COALESCE(sum(r.completeness = 'reconciledFromTotals'), 0), COALESCE(sum(r.completeness = 'partial'), 0),
+        COALESCE(sum(CASE WHEN p.origin = 'derived' THEN r.logical_input_tokens + r.output_tokens ELSE 0 END), 0),
+        COALESCE(sum(CASE WHEN p.origin = 'user' THEN r.logical_input_tokens + r.output_tokens ELSE 0 END), 0)
         """
 
     struct Aggregate {
@@ -167,7 +181,8 @@ enum CostSQL {
         coverage.reconciledRequests = Int(row.int(offset + 14))
         coverage.partialRequests = Int(row.int(offset + 15))
         return Aggregate(requests: Int(row.int(offset)), tokens: tokens,
-                         cost: EstimatedCost(picoUSD: row.int(offset + 8), unpricedTokens: row.int(offset + 9)),
+                         cost: EstimatedCost(picoUSD: row.int(offset + 8), unpricedTokens: row.int(offset + 9),
+                             derivedTokens: row.int(offset + 16), userPricedTokens: row.int(offset + 17)),
                          coverage: coverage)
     }
 }

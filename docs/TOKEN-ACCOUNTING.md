@@ -42,7 +42,7 @@ Claude Code writes a response as several JSONL lines, one per content block, rep
 
 ### Identity
 
-A request is identified by `(source, request_key)`. For Claude Code, `request_key` is the API **message id** (`msg_…`). The server `request_id` (`req_…`) is stored beside it and indexed, which is the key for correlating the same request from a second source such as OpenTelemetry.
+A request is identified by `(product, request_key)`, with the rule below for products of one provider. For Claude Code, `request_key` is the API **message id** (`msg_…`). The server `request_id` (`req_…`) is stored beside it and indexed, which is the key for correlating the same request from a second source such as OpenTelemetry.
 
 ### Finalizing a request: the merge rule
 
@@ -63,6 +63,19 @@ Taking the maximum per field also handles reordered and delayed observations: an
 
 An observation whose four token fields are all zero is discarded. It is a replay or a placeholder, and storing it could create a phantom request. `<synthetic>` model messages (client-generated) are ignored.
 
+### What an identity is, and what it is not
+
+An identity has to be exactly as wide as the guarantee the telemetry gives, so each dimension was checked against the data:
+
+| Dimension | In the identity? | Why |
+|---|---|---|
+| Session | No | A fork or a sub-agent file repeats its parent's requests, and the same request must stay one request. The session is where the request is attributed, and for a copied Codex record that is the thread that made it (`thread_id`), whichever file is read first. |
+| Account | No | An API message or response id is unique across accounts. |
+| Product | Yes, widened to the provider for responses | Claude message ids and OpenAI response ids are issued by the provider. A response copied into a session of another product of the same provider (a fork opened in another app) merges into the stored row. Request keys that are made from a position (`<session>:<ordinal>`) contain the session id and cannot collide. |
+| File or copy | No | The same response read from an active, archived or compressed copy of a session is one request. |
+| Cumulative totals | **Never** | Two unrelated Codex runs report identical running totals for their first response. Totals decide only whether an event repeats the previous snapshot, and they are compared with a fork's own parent to recognize copied history (see [OPENAI-CODEX](OPENAI-CODEX.md)). |
+| Resumption | No | A resumed session continues in its file and its keys do not change. |
+
 ### Sub-agents
 
 Sub-agent transcripts live in `<session>/subagents/agent-<id>.jsonl` and carry the **parent's** `sessionId`. Their requests belong to the parent session, with `agent_key` recording which agent made them. Because deduplication is global (by message id), a request replayed into a fork file is counted once, and attributed to the main conversation.
@@ -77,17 +90,37 @@ Session totals include all child agents. The session page also shows the main co
 
 ## Cost estimates
 
-Costs are API-equivalent estimates at published list prices, kept strictly apart from anything charged:
+Costs are API-equivalent estimates at published list prices, kept strictly apart from anything charged. They are **not** what a Claude or ChatGPT subscription costs, and the cost page says so at the top:
 
 * Prices are integers in micro-USD per million tokens, so `tokens × rate` is an exact whole number of pico-USD. Sums over millions of requests carry no floating point error. Exports write the exact decimal.
-* Rate cards are **dated and append-only**. A new price is a new row effective from a later instant; older requests keep their older price.
-* Rate cards carry a **prompt-size tier** (Haiku 5.5 has one card up to 100,000 prompt tokens and another above) and a **speed** (fast mode bills at twice the rate on the models that offer it).
+* Rate cards are **dated and append-only**. A new price is a new row effective from a later instant; older requests keep their older price, so an estimate for past usage is the same whenever it is computed.
+* Rate cards carry a **prompt-size tier** (Haiku 5.5 has one card up to 100,000 prompt tokens and another above; OpenAI bills the whole request at the long-context price above 272,000 input tokens) and a **speed or tier** (Claude's fast mode, OpenAI's `fast` and `flex`). A tier with no card leaves the request unpriced instead of being priced as standard.
 * Cache writes are priced at the 5-minute or 1-hour rate according to the stored split; writes of unstated lifetime are priced at the 5-minute rate (a lower bound).
-* A model with no rate card is **unpriced**: its tokens are excluded and counted in `unpricedTokens`, and the figure is shown as a lower bound ("$12.34+"). No generic fallback price is used.
+* A model with no rate card is **unpriced**: its tokens are excluded and counted in `unpricedTokens`, and the figure is shown as a lower bound ("$12.34+"). No generic fallback price is used, and a model is never priced as a similarly named one.
+* Every card is **published**, **derived** or **yours**, and the cost page says how many of the priced tokens used each. A derived price is the price before a cut that the provider announced as a percentage, worked out from the published price after it.
 * If a source reports its own cost (Claude Code's per-session `cost-state`), it is stored in separate columns and displayed next to, never merged with, the estimate.
 
 Validated against Claude Code's own recorded session costs on this machine (164 sessions): median per-session deviation 0.4 %, total within 7.4 %. Differences come from mid-session snapshots in Claude Code's record and from price assumptions made by Claude Code itself.
 
+### OpenAI prices
+
+Read on 2026-10-20 from OpenAI's pricing page and changelog (developers.openai.com/api/docs/pricing and /changelog). Prices are US$ per million tokens for prompts up to 272,000 tokens; reasoning tokens are part of output and are priced once.
+
+| Model | Card from | Input | Cached | Output | Basis |
+|---|---|---|---|---|---|
+| `gpt-5.5` | 2026-04-24 | 5.00 | 0.50 | 30.00 | published |
+| `gpt-5.6-sol` | 2026-08-21 | 4.00 | 0.40 | 20.00 | published (promotional, announced through 2026-11-21) |
+| `gpt-5.6-sol` | 2026-07-09 | 5.00 | 0.50 | 30.00 | **derived** from the 2026-08-21 cut |
+| `gpt-5.6-terra` | 2026-07-30 | 2.00 | 0.20 | 12.00 | published |
+| `gpt-5.6-terra` | 2026-07-09 | 2.50 | 0.25 | 15.00 | **derived** (20 % cut on 2026-07-30) |
+| `gpt-5.6-luna` | 2026-07-30 | 0.20 | 0.02 | 1.20 | published |
+| `gpt-5.6-luna` | 2026-07-09 | 1.00 | 0.10 | 6.00 | **derived** (80 % cut on 2026-07-30) |
+| `gpt-6-astra` | 2026-09-03 | 10.00 | 1.00 | 50.00 | published |
+| `gpt-6-sol` | 2026-09-22 | 2.00 | 0.20 | 10.00 | published |
+| `gpt-6-luna` | 2026-09-22 | 0.10 | 0.01 | 0.50 | published |
+| `gpt-6.1-sol` | 2026-09-29 | 2.00 | 0.10 | 10.00 | published, cache write 2.50 |
+
+Long-context prices (above 272,000 prompt tokens), the `fast` tier and the `flex` tier are in `Sources/UsageCore/Pricing/OpenAIPricing.swift`. The derived cards have no long-context tier. The changelog gives days, not hours, so a request within a day of a change can be priced by the neighbouring card. **Not priced:** `codex-auto-review` (not a published model; 291 requests, 6.55 M tokens on this Mac), a model name with a dated suffix such as `gpt-5.5-2026-04-24` (OpenAI prices some snapshots differently from their alias, so the exact name is the key), and any name not in the table. Coverage on this Mac's history: 6 of 7 observed model names priced, 98.7 % of OpenAI tokens, about US$186 API-equivalent in total.
 
 ## Canonical measurement and per-provider normalization
 

@@ -199,7 +199,7 @@ struct DiagnosticsPage: View {
     @State private var stats = ProcessStats.sample()
     @State private var counts: DBCounts?
 
-    struct DBCounts: Sendable { var requests: Int64; var sessions: Int64; var files: Int64; var malformed: Int64; var issues: [IssueRow]; var sizeMB: Double }
+    struct DBCounts: Sendable { var requests: Int64; var sessions: Int64; var files: Int64; var malformed: Int64; var issues: [IssueRow]; var notices: [IssueRow]; var sizeMB: Double }
     struct IssueRow: Identifiable, Sendable { var id: Int64; var at: Date; var path: String?; var message: String }
 
     var body: some View {
@@ -261,6 +261,17 @@ struct DiagnosticsPage: View {
                     GridRow { Text("CPU time used").foregroundStyle(.secondary); Text(String(format: "%.1f s since launch", stats.cpuSeconds)) }
                     GridRow { Text("Threads").foregroundStyle(.secondary); Text("\(stats.threads)") }
                 }.font(.callout)
+            }
+
+            if let c = counts, !c.notices.isEmpty {
+                Card("Accounting notes", subtitle: "Places where the files could not settle exactly what was used. The figures are still counted, as described.") {
+                    ForEach(c.notices) { i in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(i.message).font(.caption)
+                            if let p = i.path { Text((p as NSString).lastPathComponent).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                        }
+                    }
+                }
             }
 
             if let c = counts, !c.issues.isEmpty {
@@ -328,7 +339,10 @@ struct DiagnosticsPage: View {
                          sessions: try c.scalarInt("SELECT count(*) FROM session") ?? 0,
                          files: try c.scalarInt("SELECT count(*) FROM source_file") ?? 0,
                          malformed: try c.scalarInt("SELECT COALESCE(sum(malformed_lines),0) FROM source_file") ?? 0,
-                         issues: try c.query("SELECT id, at, path, message FROM ingest_issue ORDER BY id DESC LIMIT 8") {
+                         issues: try c.query("SELECT id, at, path, message FROM ingest_issue WHERE severity != 'notice' ORDER BY id DESC LIMIT 8") {
+                             IssueRow(id: $0.int(0), at: Clock.date(ms: $0.int(1)), path: $0.textOrNil(2), message: $0.text(3))
+                         },
+                         notices: try c.query("SELECT id, at, path, message FROM ingest_issue WHERE severity = 'notice' ORDER BY id DESC LIMIT 20") {
                              IssueRow(id: $0.int(0), at: Clock.date(ms: $0.int(1)), path: $0.textOrNil(2), message: $0.text(3))
                          },
                          sizeMB: Double(db.diskUsageBytes()) / 1_048_576)

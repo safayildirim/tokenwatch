@@ -28,11 +28,19 @@ public enum SnapshotRenderer {
                            to: directory.appendingPathComponent("session-detail\(suffix).png"))
             model.openSessionID = nil
         }
-        await snapshot(MenuBarContentView().environment(model).background(Color(nsColor: .windowBackgroundColor)),
-                       size: CGSize(width: 380, height: 620), appearance: appearance, wait: 1,
+        // The popover is drawn without a window. A window of this size made AppKit loop in its constraint pass when
+        // the popover was hosted offscreen, and the popover's content is plain enough to draw directly.
+        renderDirectly(MenuBarContentView().environment(model).background(Color(nsColor: .windowBackgroundColor)),
+                       size: CGSize(width: 380, height: 860), dark: dark,
                        to: directory.appendingPathComponent("menubar-popover\(suffix).png"))
-        await snapshot(SettingsView().environment(model), size: CGSize(width: 600, height: 520), appearance: appearance, wait: 1,
-                       to: directory.appendingPathComponent("settings\(suffix).png"))
+    }
+
+    private static func renderDirectly<V: View>(_ view: V, size: CGSize, dark: Bool, to url: URL) {
+        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height, alignment: .top).environment(\.colorScheme, dark ? .dark : .light))
+        renderer.scale = 2
+        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: url)
     }
 
     private static func snapshot<V: View>(_ view: V, size: CGSize, appearance: NSAppearance?, wait: Double = 2.5, to url: URL) async {

@@ -5,7 +5,8 @@ import Foundation
 // Claude Code writes a JSON document to this process's standard input. Only one part of it is kept:
 // the documented `rate_limits` object, which holds the subscription utilization and reset time of
 // the five-hour and seven-day windows. Everything else in the input (the model, the working
-// directory, the transcript path, the cost) is discarded without being stored.
+// directory, the transcript path, the cost) is discarded without being stored. The transcript path is used once, to read
+// the modification time of that file, and the file itself is never opened.
 //
 // The helper must never break the user's status line, so every failure path still exits with
 // status 0, and any status line command given with `--chain` is run and its output passed through.
@@ -78,18 +79,38 @@ func record(_ input: Data) -> String {
                                              attributes: [.posixPermissions: 0o700])
     let file = directory.appendingPathComponent("statusline-\(safeID).json")
 
-    if let existing = FileManager.default.contents(atPath: file.path),
-       let old = try? JSONSerialization.jsonObject(with: existing) as? [String: Any],
-       old["fingerprint"] as? String == fingerprint {
+    let previous = FileManager.default.contents(atPath: file.path)
+        .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    if let previous, previous["fingerprint"] as? String == fingerprint {
         // Nothing changed since the last write, so the file is already correct.
+        return summary
+    }
+    // Claude Code runs the status line again when a window reaches its reset time, and the window is then missing from
+    // the input. That says nothing new about the windows that remain, whose numbers are still the ones from the last
+    // response. If the session has made no API call and every remaining window has the value it had, the file is left
+    // as it is, so that the remaining windows are not dated to this moment.
+    if let previous, let oldFingerprint = previous["fingerprint"] as? String,
+       oldFingerprint.split(separator: "|", omittingEmptySubsequences: false).prefix(2).map(String.init) == Array(parts.prefix(2)),
+       let oldWindows = previous["rateLimits"] as? [String: [String: Double]],
+       windows.allSatisfy({ oldWindows[$0.key] == $0.value }) {
         return summary
     }
 
     let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+    // A change in the fingerprint means the session has just made an API call, so the numbers are from this moment.
+    // The first time a session is seen is different: the helper may have been installed while the session was already
+    // running, and the numbers may then be hours old. Claude Code appends to the session's transcript when a response
+    // completes, so the transcript's modification time is the latest moment those numbers can have been taken. Only
+    // the file's modification time is looked at, and its content is never opened.
+    var observedMs = nowMs
+    if previous == nil, let path = root["transcript_path"] as? String,
+       let modified = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date {
+        observedMs = min(nowMs, Int64((modified.timeIntervalSince1970 * 1000).rounded()))
+    }
     let document: [String: Any] = [
         "schema": 1,
         "sessionId": sessionID,
-        "observedAt": nowMs,
+        "observedAt": observedMs,
         "capturedAt": nowMs,
         "fingerprint": fingerprint,
         "rateLimits": windows,

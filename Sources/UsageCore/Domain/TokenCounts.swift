@@ -80,10 +80,17 @@ public struct EstimatedCost: Sendable, Equatable, Codable, Hashable {
     /// Tokens (logical input plus output) that could not be priced because no rate card exists for
     /// their model. A non-zero value means `picoUSD` is a lower bound.
     public var unpricedTokens: Int64
+    /// Tokens that were priced with a built-in card whose price was worked out from a published price cut and was not
+    /// itself published (see `PriceBasis.derived`).
+    public var derivedTokens: Int64
+    /// Tokens that were priced with a card that the user added.
+    public var userPricedTokens: Int64
 
-    public init(picoUSD: Int64 = 0, unpricedTokens: Int64 = 0) {
+    public init(picoUSD: Int64 = 0, unpricedTokens: Int64 = 0, derivedTokens: Int64 = 0, userPricedTokens: Int64 = 0) {
         self.picoUSD = picoUSD
         self.unpricedTokens = unpricedTokens
+        self.derivedTokens = derivedTokens
+        self.userPricedTokens = userPricedTokens
     }
 
     public static let zero = EstimatedCost()
@@ -93,7 +100,8 @@ public struct EstimatedCost: Sendable, Equatable, Codable, Hashable {
     public var isPartial: Bool { unpricedTokens > 0 }
 
     public static func + (a: EstimatedCost, b: EstimatedCost) -> EstimatedCost {
-        EstimatedCost(picoUSD: a.picoUSD + b.picoUSD, unpricedTokens: a.unpricedTokens + b.unpricedTokens)
+        EstimatedCost(picoUSD: a.picoUSD + b.picoUSD, unpricedTokens: a.unpricedTokens + b.unpricedTokens,
+                      derivedTokens: a.derivedTokens + b.derivedTokens, userPricedTokens: a.userPricedTokens + b.userPricedTokens)
     }
 }
 

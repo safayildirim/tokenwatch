@@ -52,9 +52,9 @@ public enum ModelCatalog {
     }
 
     private static func describeOpenAI(_ raw: String) -> Description {
-        var s = raw.lowercased()
-        // Strip a trailing snapshot date such as -2026-10-01.
-        if let range = s.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) { s.removeSubrange(range) }
+        // A dated snapshot such as `gpt-4o-2024-05-13` is not folded into its alias. OpenAI prices some snapshots
+        // differently from the alias, so the exact identifier is what a price is attached to.
+        let s = raw.lowercased()
         let family: String
         if s.hasPrefix("gpt") { family = "gpt" }
         else if s.contains("codex") { family = "codex" }

@@ -291,4 +291,19 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(env.model.providerUsage.count, 2)
         await env.cleanup()
     }
+
+    func testAWindowThatHasJustResetShowsADashInsteadOfTheOtherWindowsFigure() async throws {
+        let env = try UIEnv()
+        // The five-hour window of the last report reset an hour ago. The weekly window is still open at 34%.
+        try env.writeCodexSession("01a00000-0000-7000-8000-0000000000d1", lines: 2, at: Clock.nowMs() - 4 * 3_600_000, primary: 12, secondary: 34)
+        await env.model.start()
+        await env.waitUntil { env.model.quotaState("10080m", .openAI)?.utilizationPercent == 34 }
+        XCTAssertNil(env.model.quotaState("300m", .openAI)?.utilizationPercent, "the reset window is unknown, not zero")
+
+        env.model.updateSettings { $0.menuBarMode = .allProviders }
+        XCTAssertEqual(env.model.menuBarTitle.text, "O –", "the weekly figure is not shown in place of the five-hour one")
+        env.model.updateSettings { $0.menuBarMode = .quota(.openAI) }
+        XCTAssertTrue(env.model.menuBarTitle.text.hasPrefix("– · 34%"), env.model.menuBarTitle.text)
+        await env.cleanup()
+    }
 }

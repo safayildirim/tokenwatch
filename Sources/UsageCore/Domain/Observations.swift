@@ -385,6 +385,8 @@ public struct NormalizedBatch: Sendable {
     public var agents: [String: AgentObservation] = [:]
     public var costReports: [String: CostReportObservation] = [:]
     public var quota: [QuotaObservation] = []
+    /// Statements about the file that was read, for the diagnostics view. They replace those of the previous read.
+    public var notices: [String] = []
     public var lineCount = 0
     public var malformedLineCount = 0
     public var oversizedLineCount = 0

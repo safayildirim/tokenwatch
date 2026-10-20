@@ -1,0 +1,264 @@
+import XCTest
+@testable import UsageCore
+
+final class AlertEngineTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_790_000_000)
+    private var settings: NotificationSettings {
+        var s = NotificationSettings()
+        s.enabled = true
+        return s
+    }
+
+    private func state(_ kind: QuotaWindowKind = .fiveHour, pct: Double, resetsIn: TimeInterval = 7200, observedAgo: TimeInterval = 20,
+                       authority: QuotaAuthority = .authoritative, at: Date? = nil) -> QuotaWindowState {
+        let n = at ?? now
+        let reading = QuotaReading(kind: kind, utilizationPercent: pct, resetsAt: n.addingTimeInterval(resetsIn),
+                                   observedAt: n.addingTimeInterval(-observedAgo), provider: "p", authority: authority)
+        return QuotaEvaluator.evaluate(kind: kind, readings: [reading], now: n, allowUnverified: true)
+    }
+
+    private func engine() throws -> (AlertEngine, TestEnv) {
+        let env = try TestEnv()
+        return (AlertEngine(db: env.db), env)
+    }
+
+    func testCrossingAThresholdNotifiesOnce() throws {
+        let (e, _) = try engine()
+        XCTAssertTrue(e.evaluate(states: [state(pct: 30)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+        let first = e.evaluate(states: [state(pct: 52)], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        XCTAssertEqual(first.map(\.kind), [.threshold])
+        XCTAssertTrue(first[0].title.contains("52%"))
+        // The same crossing, observed again and again, is silent.
+        for pct in [52, 53, 60, 74.9] {
+            XCTAssertTrue(e.evaluate(states: [state(pct: pct)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty, "\(pct)")
+        }
+        // The next threshold is a new event.
+        XCTAssertEqual(e.evaluate(states: [state(pct: 76)], sources: [], recentLocalActivity: true, settings: settings, now: now).count, 1)
+    }
+
+    func testJumpingOverSeveralThresholdsAnnouncesOnlyTheHighest() throws {
+        let (e, _) = try engine()
+        let alerts = e.evaluate(states: [state(pct: 93)], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        XCTAssertEqual(alerts.count, 1)
+        XCTAssertTrue(alerts[0].key.hasSuffix(":90"))
+        XCTAssertTrue(e.evaluate(states: [state(pct: 94)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty,
+                      "the lower thresholds were consumed by the same jump")
+    }
+
+    func testDedupSurvivesRestart() throws {
+        let (e, env) = try engine()
+        _ = e.evaluate(states: [state(pct: 80)], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        let reopened = AlertEngine(db: env.db)
+        XCTAssertTrue(reopened.evaluate(states: [state(pct: 80)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+    }
+
+    func testANewWindowStartsFresh() throws {
+        let (e, _) = try engine()
+        XCTAssertEqual(e.evaluate(states: [state(pct: 80)], sources: [], recentLocalActivity: true, settings: settings, now: now).count, 1)
+        // Five hours later the same percentage in a new window is a new crossing.
+        let later = now.addingTimeInterval(6 * 3600)
+        let alerts = e.evaluate(states: [state(pct: 80, at: later)], sources: [], recentLocalActivity: true, settings: settings, now: later)
+        XCTAssertTrue(alerts.contains { $0.kind == .threshold })
+    }
+
+    func testStaleOrUnverifiedValuesNeverTriggerQuotaAlerts() throws {
+        let (e, _) = try engine()
+        XCTAssertTrue(e.evaluate(states: [state(pct: 99, observedAgo: 5 * 3600)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+        XCTAssertTrue(e.evaluate(states: [state(pct: 99, authority: .unverified)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+    }
+
+    func testRefreshingStaleDataWithoutAStateChangeStaysSilent() throws {
+        let (e, _) = try engine()
+        _ = e.evaluate(states: [state(pct: 80)], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        // The data goes stale, then is refreshed with the identical value.
+        _ = e.evaluate(states: [state(pct: 80, observedAgo: 4 * 3600)], sources: [], recentLocalActivity: false, settings: settings, now: now)
+        XCTAssertTrue(e.evaluate(states: [state(pct: 80, observedAgo: 1)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+    }
+
+    func testNothingIsDeliveredWhenNotificationsAreOff() throws {
+        let (e, _) = try engine()
+        var off = settings
+        off.enabled = false
+        XCTAssertTrue(e.evaluate(states: [state(pct: 95)], sources: [], recentLocalActivity: true, settings: off, now: now).isEmpty)
+        // Turning them on later does not replay the crossing that already happened.
+        XCTAssertTrue(e.evaluate(states: [state(pct: 95)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+    }
+
+    func testCustomThresholdsAreHonoured() throws {
+        let (e, _) = try engine()
+        var s = settings
+        s.fiveHourThresholds = [10]
+        XCTAssertEqual(e.evaluate(states: [state(pct: 11)], sources: [], recentLocalActivity: true, settings: s, now: now).count, 1)
+    }
+
+    func testWeeklyUsesItsOwnThresholds() throws {
+        let (e, _) = try engine()
+        // 60% passes the five-hour 50% threshold but no weekly threshold (75, 90).
+        XCTAssertTrue(e.evaluate(states: [state(.sevenDay, pct: 60, resetsIn: 86400)], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+        XCTAssertEqual(e.evaluate(states: [state(.sevenDay, pct: 76, resetsIn: 86400)], sources: [], recentLocalActivity: true, settings: settings, now: now).count, 1)
+    }
+
+    func testResetIsAnnouncedOnceAfterSignificantUsage() throws {
+        let (e, _) = try engine()
+        _ = e.evaluate(states: [state(pct: 88)], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        // After the window's end the evaluator reports an elapsed window.
+        let after = now.addingTimeInterval(7200 + 60)
+        let reading = QuotaReading(kind: .fiveHour, utilizationPercent: 88, resetsAt: now.addingTimeInterval(7200), observedAt: now, provider: "p", authority: .authoritative)
+        let elapsedState = QuotaEvaluator.evaluate(kind: .fiveHour, readings: [reading], now: after, allowUnverified: false)
+        let first = e.evaluate(states: [elapsedState], sources: [], recentLocalActivity: false, settings: settings, now: after)
+        XCTAssertEqual(first.filter { $0.kind == .reset }.count, 1)
+        let second = e.evaluate(states: [elapsedState], sources: [], recentLocalActivity: false, settings: settings, now: after)
+        XCTAssertTrue(second.filter { $0.kind == .reset }.isEmpty)
+    }
+
+    func testStaleFeedWhileWorkingRaisesOneAlert() throws {
+        let (e, _) = try engine()
+        _ = e.evaluate(states: [state(pct: 20, observedAgo: 30)], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        let stale = state(pct: 20, observedAgo: 2 * 3600)
+        let alerts = e.evaluate(states: [stale], sources: [], recentLocalActivity: true, settings: settings, now: now)
+        XCTAssertEqual(alerts.filter { $0.kind == .staleData }.count, 1)
+        XCTAssertTrue(e.evaluate(states: [stale], sources: [], recentLocalActivity: true, settings: settings, now: now).isEmpty)
+    }
+
+    func testPersistentCollectionFailureAlertsOncePerEpisode() throws {
+        let (e, _) = try engine()
+        var health = SourceHealth(sourceID: "claude-code", displayName: "Claude Code", coverageNote: "")
+        health.state = .failing
+        health.consecutiveFailures = 3
+        health.lastError = "The disk is full"
+        XCTAssertEqual(e.evaluate(states: [], sources: [health], recentLocalActivity: false, settings: settings, now: now).count, 1)
+        XCTAssertTrue(e.evaluate(states: [], sources: [health], recentLocalActivity: false, settings: settings, now: now).isEmpty)
+        // A transient failure does not alert.
+        health.consecutiveFailures = 1
+        health.lastError = "other"
+        XCTAssertTrue(e.evaluate(states: [], sources: [health], recentLocalActivity: false, settings: settings, now: now).isEmpty)
+        // After recovery a later failure can alert again.
+        health.state = .ok
+        health.consecutiveFailures = 0
+        _ = e.evaluate(states: [], sources: [health], recentLocalActivity: false, settings: settings, now: now)
+        health.state = .failing
+        health.consecutiveFailures = 5
+        health.lastError = "The disk is full"
+        XCTAssertEqual(e.evaluate(states: [], sources: [health], recentLocalActivity: false, settings: settings, now: now).count, 1)
+    }
+}
+
+final class StatusLineInstallerTests: XCTestCase {
+    private let bridge = URL(fileURLWithPath: "/Applications/Claude Usage Monitor.app/Contents/MacOS/ccu-statusline")
+
+    private func settingsFile(_ env: TestEnv, _ contents: String?) throws -> URL {
+        let url = env.root.appendingPathComponent("claude/settings.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let contents { try contents.write(to: url, atomically: true, encoding: .utf8) }
+        return url
+    }
+
+    private func json(_ url: URL) throws -> [String: Any] {
+        try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+    }
+
+    func testShellQuotingRoundTrips() {
+        for s in ["simple", "with space", "it's", "a'b'c", "$(rm -rf /)", "x; y", "\"q\""] {
+            XCTAssertEqual(ShellQuote.unquote(ShellQuote.quote(s)), s)
+        }
+        XCTAssertEqual(ShellQuote.quote("it's"), "'it'\\''s'")
+    }
+
+    func testInstallAddsTheStatusLineAndLeavesTheRestOfTheFileUntouched() throws {
+        let env = try TestEnv()
+        let original = """
+        {
+          "env": { "A": "1" },
+          "permissions": {
+            "allow": ["Bash(ls:*)"]
+          },
+          "model":   "opus"
+        }
+        """
+        let url = try settingsFile(env, original)
+        let backup = try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
+        let now = try json(url)
+        XCTAssertEqual((now["statusLine"] as? [String: Any])?["type"] as? String, "command")
+        let command = (now["statusLine"] as! [String: Any])["command"] as! String
+        XCTAssertTrue(command.contains("ccu-statusline"))
+        XCTAssertFalse(command.contains("--chain"))
+        // Every other setting is preserved, including its original text.
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(text.contains("\"model\":   \"opus\""), "formatting of untouched settings is preserved")
+        XCTAssertTrue(text.contains("\"allow\": [\"Bash(ls:*)\"]"))
+        XCTAssertEqual((now["env"] as? [String: String]), ["A": "1"])
+        XCTAssertEqual(try String(contentsOf: XCTUnwrap(backup), encoding: .utf8), original, "a backup of the original is made")
+        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
+    }
+
+    func testInstallChainsAnExistingStatusLineAndUninstallRestoresIt() throws {
+        let env = try TestEnv()
+        let url = try settingsFile(env, #"{"statusLine":{"type":"command","command":"~/bin/my line.sh --flag 'x'","padding":2},"other":true}"#)
+        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
+        var info = StatusLineInstaller.inspect(settingsURL: url)
+        XCTAssertTrue(info.isInstalled)
+        XCTAssertEqual(info.chainedCommand, "~/bin/my line.sh --flag 'x'")
+        XCTAssertEqual((try json(url)["statusLine"] as? [String: Any])?["padding"] as? Int, 2, "other statusLine options are kept")
+
+        // Installing again must not nest the chain.
+        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
+        info = StatusLineInstaller.inspect(settingsURL: url)
+        XCTAssertEqual(info.chainedCommand, "~/bin/my line.sh --flag 'x'")
+        XCTAssertEqual(((try json(url)["statusLine"] as! [String: Any])["command"] as! String).components(separatedBy: "--chain").count, 2)
+
+        try StatusLineInstaller.uninstall(settingsURL: url)
+        info = StatusLineInstaller.inspect(settingsURL: url)
+        XCTAssertFalse(info.isInstalled)
+        XCTAssertEqual(info.command, "~/bin/my line.sh --flag 'x'", "the user's own status line is back")
+        XCTAssertEqual(try json(url)["other"] as? Bool, true)
+    }
+
+    func testUninstallWithoutChainRemovesTheMemberCleanly() throws {
+        let env = try TestEnv()
+        let url = try settingsFile(env, "{\n  \"a\": 1,\n  \"b\": 2\n}\n")
+        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
+        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
+        try StatusLineInstaller.uninstall(settingsURL: url)
+        let after = try json(url)
+        XCTAssertNil(after["statusLine"])
+        XCTAssertEqual(after["a"] as? Int, 1)
+        XCTAssertEqual(after["b"] as? Int, 2)
+    }
+
+    func testInstallIntoMissingOrEmptyObjectWorks() throws {
+        let env = try TestEnv()
+        let missing = try settingsFile(env, nil)
+        XCTAssertNil(try StatusLineInstaller.install(settingsURL: missing, bridge: bridge))
+        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: missing).isInstalled)
+        let empty = env.root.appendingPathComponent("claude/empty.json")
+        try "{}".write(to: empty, atomically: true, encoding: .utf8)
+        try StatusLineInstaller.install(settingsURL: empty, bridge: bridge)
+        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: empty).isInstalled)
+    }
+
+    func testInvalidSettingsAreNeverModified() throws {
+        let env = try TestEnv()
+        let broken = "{ \"a\": 1, oops"
+        let url = try settingsFile(env, broken)
+        XCTAssertThrowsError(try StatusLineInstaller.install(settingsURL: url, bridge: bridge))
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), broken)
+        XCTAssertFalse(StatusLineInstaller.inspect(settingsURL: url).settingsIsValidJSON)
+    }
+
+    func testStatusLineKeyInsideAStringIsNotMistakenForTheRealOne() throws {
+        let env = try TestEnv()
+        let url = try settingsFile(env, #"{"note":"set \"statusLine\": here","x":{"statusLine":"nested"}}"#)
+        XCTAssertFalse(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
+        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
+        let parsed = try json(url)
+        XCTAssertEqual(parsed["note"] as? String, #"set "statusLine": here"#)
+        XCTAssertEqual(((parsed["x"] as? [String: Any])?["statusLine"]) as? String, "nested")
+        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
+    }
+
+    func testNonCommandStatusLineIsReportedNotOverwrittenSilently() throws {
+        let env = try TestEnv()
+        let url = try settingsFile(env, #"{"statusLine":{"type":"text","text":"hello"}}"#)
+        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).usesNonCommandStatusLine)
+    }
+}

@@ -23,11 +23,17 @@ More views: [quota](docs/images/dashboard-quota.png), [cost](docs/images/dashboa
 ## Build and install
 
 ```bash
+make install                # builds the app, copies it to /Applications (or ~/Applications) and starts it
+```
+
+`make` on its own lists the other targets. They are short names for the scripts underneath, which you can also run directly:
+
+```bash
 scripts/build-app.sh        # builds build/AI Usage Monitor.app (optimized, ad-hoc signed)
 scripts/install.sh          # copies it to /Applications (or ~/Applications) and starts it
 ```
 
-`scripts/build-app.sh --universal` builds for Apple silicon and Intel.
+`make universal` (or `scripts/build-app.sh --universal`) builds for Apple silicon and Intel.
 
 This is a menu bar app with no Dock icon, so look for the ✦ icon at the top right of the screen. If your menu bar is full, macOS hides new icons under the notch; the app detects that and shows a Dock icon instead (or turn on Settings → General → *Show in the Dock*). Opening the app from Applications opens the dashboard (as does the very first launch). The first launch imports your existing Claude Code history automatically. Watch the progress in the menu bar popover. Nothing needs to be registered: new sessions, projects and IDEs are discovered on their own.
 

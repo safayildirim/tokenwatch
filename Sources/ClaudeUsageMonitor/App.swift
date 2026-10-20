@@ -1,8 +1,11 @@
 import SwiftUI
+import AppKit
 import UsageUI
 
 @main
 struct ClaudeUsageMonitorApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     @State private var model: AppModel? = try? AppModel.bootstrap()
     @State private var startupError: String?
 

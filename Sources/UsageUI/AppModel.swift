@@ -340,6 +340,14 @@ public final class AppModel {
         }
     }
 
+    /// Returns true exactly once, on the first launch ever, so that a new user sees the dashboard
+    /// instead of an app that appears to do nothing.
+    public func consumeFirstLaunch() -> Bool {
+        guard !CommandLine.arguments.contains("--snapshots"), db.setting("first_launch_shown") == nil else { return false }
+        try? db.setSetting("first_launch_shown", "1")
+        return true
+    }
+
     // MARK: Derived values
 
     public func quotaState(_ kind: QuotaWindowKind) -> QuotaWindowState? { quotaStates.first { $0.kind == kind } }
@@ -415,6 +423,23 @@ public enum LoginItem {
         case .requiresApproval: "Waiting for approval in System Settings > General > Login Items"
         @unknown default: "Unknown"
         }
+    }
+}
+
+// MARK: - Opening from Finder
+
+public extension Notification.Name {
+    /// Posted when the user opens the app again while it is already running.
+    static let openDashboardRequested = Notification.Name("dev.claudeusage.monitor.openDashboardRequested")
+}
+
+/// Turns the system's "reopen" request into a request to show the dashboard.
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    public override init() { super.init() }
+
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NotificationCenter.default.post(name: .openDashboardRequested, object: nil)
+        return true
     }
 }
 

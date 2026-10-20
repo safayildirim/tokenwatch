@@ -29,7 +29,7 @@ scripts/install.sh          # copies it to /Applications (or ~/Applications) and
 
 `scripts/build-app.sh --universal` builds for Apple silicon and Intel.
 
-The first launch imports your existing Claude Code history automatically. Watch the progress in the menu bar popover. Nothing needs to be registered: new sessions, projects and IDEs are discovered on their own.
+This is a menu bar app with no Dock icon, so look for the ✦ icon at the top right of the screen. Opening the app from Applications opens the dashboard (as does the very first launch). The first launch imports your existing Claude Code history automatically. Watch the progress in the menu bar popover. Nothing needs to be registered: new sessions, projects and IDEs are discovered on their own.
 
 ### Launch at login
 

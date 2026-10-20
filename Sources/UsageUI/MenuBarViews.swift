@@ -16,9 +16,15 @@ public struct MenuBarLabel: View {
         }
         .help(title.tooltip)
         .accessibilityLabel("Claude usage \(title.text)")
+        // Opening the app again from Finder or the Applications folder asks for the dashboard, because a
+        // menu bar app has no other visible response to that action.
+        .onReceive(NotificationCenter.default.publisher(for: .openDashboardRequested)) { _ in
+            openWindow(id: "dashboard")
+        }
         // The label exists from launch, which makes it the right place to start background collection.
         .task {
             await model.start()
+            if model.consumeFirstLaunch() { openWindow(id: "dashboard") }
             // Launch arguments let the app open straight to a window, which is also how the UI is tested.
             let args = CommandLine.arguments
             if args.contains("--show-dashboard") { openWindow(id: "dashboard") }

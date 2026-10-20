@@ -1,4 +1,4 @@
-# AI Usage Monitor
+# Tokenwatch
 
 A native macOS menu bar app that watches your AI coding usage in the background, across providers: **Claude Code** (terminal, VS Code, Claude Desktop's Code tab) and **OpenAI's Codex engine** (Codex CLI, Codex Desktop, the IDE plugins and the Work mode of the ChatGPT desktop app). It gives exact token accounting, an analytics dashboard, and your **real** subscription quota when the provider reports it. Other providers plug in through a registry and an adapter (see [SOURCE-ADAPTERS](docs/SOURCE-ADAPTERS.md)).
 
@@ -13,7 +13,7 @@ A native macOS menu bar app that watches your AI coding usage in the background,
 
 More views: [quota](docs/images/dashboard-quota.png), [cost](docs/images/dashboard-cost.png), [providers and capability matrix](docs/images/dashboard-providers.png), [usage trends](docs/images/dashboard-trends.png), [session explorer](docs/images/dashboard-sessions.png), [session detail](docs/images/session-detail.png), [models](docs/images/dashboard-models.png), [diagnostics](docs/images/dashboard-diagnostics.png), dark mode ([dashboard](docs/images/dashboard-overview-dark.png), [popover](docs/images/menubar-popover-dark.png)).
 
-*The screenshots in `docs/images` show both providers. They are drawn by the app's own offscreen renderer (`ClaudeUsageMonitor --snapshots DIR`) from synthetic demo data (`scripts/make-demo-data.py`), including an illustrative Claude quota reading, so nothing in them is anyone's real usage. They are not captures of a screen, and the renderer draws the dashboard's sidebar as an empty panel, which the real window does not.*
+*The screenshots in `docs/images` show both providers. They are drawn by the app's own offscreen renderer (`Tokenwatch --snapshots DIR`) from synthetic demo data (`scripts/make-demo-data.py`), including an illustrative Claude quota reading, so nothing in them is anyone's real usage. They are not captures of a screen, and the renderer draws the dashboard's sidebar as an empty panel, which the real window does not.*
 
 ## Requirements
 
@@ -29,7 +29,7 @@ make install                # builds the app, copies it to /Applications (or ~/A
 `make` on its own lists the other targets. They are short names for the scripts underneath, which you can also run directly:
 
 ```bash
-scripts/build-app.sh        # builds build/AI Usage Monitor.app (optimized, ad-hoc signed)
+scripts/build-app.sh        # builds build/Tokenwatch.app (optimized, ad-hoc signed)
 scripts/install.sh          # copies it to /Applications (or ~/Applications) and starts it
 ```
 
@@ -42,7 +42,7 @@ This is a menu bar app with no Dock icon, so look for the ✦ icon at the top ri
 Pick one:
 
 1. **In the app:** Settings → General → *Launch at login* (uses `SMAppService`). macOS may ask you to approve it in System Settings → General → Login Items. The app should be installed in `/Applications` or `~/Applications`.
-2. **From a terminal:** `"/Applications/AI Usage Monitor.app/Contents/MacOS/ClaudeUsageMonitor" --login-item enable` (also `disable` and `status`). This registers the app with macOS exactly as the Settings switch does. Use only one of the three ways.
+2. **From a terminal:** `"/Applications/Tokenwatch.app/Contents/MacOS/Tokenwatch" --login-item enable` (also `disable` and `status`). This registers the app with macOS exactly as the Settings switch does. Use only one of the three ways.
 3. **LaunchAgent**, which also restarts the app if it ever crashes: `scripts/install-launchagent.sh` (remove with `--remove`).
 
 The app needs no terminal and no open window to keep collecting. Only one copy runs: opening the app again brings the running copy forward, and a second copy started by hand exits immediately, so two collectors can never compete for the database.
@@ -87,7 +87,7 @@ Optional, off by default (Settings → Notifications). Thresholds for each windo
 
 ### Export
 
-Settings → Export, or `ccu export`. Session history, request-level usage, project and model summaries, daily and weekly totals, quota history, as CSV or JSON, for any date range. Every column's definition and unit is included (in the JSON, or a companion `.metadata.json` next to a CSV). Costs are exact decimals. Text cells that could be read as spreadsheet formulas are neutralized.
+Settings → Export, or `tw export`. Session history, request-level usage, project and model summaries, daily and weekly totals, quota history, as CSV or JSON, for any date range. Every column's definition and unit is included (in the JSON, or a companion `.metadata.json` next to a CSV). Costs are exact decimals. Text cells that could be read as spreadsheet formulas are neutralized.
 
 ### Data retention and deletion
 
@@ -95,21 +95,21 @@ Settings → Data: keep history forever or for 90 days to 2 years, and delete ev
 
 ## Command line tool
 
-`build/AI Usage Monitor.app/Contents/MacOS/ccu` uses the same core as the app.
+`build/Tokenwatch.app/Contents/MacOS/tw` uses the same core as the app.
 
 ```bash
-ccu import                 # Claude and Codex; incremental and idempotent (--provider claude|openai)
-ccu totals
-ccu verify                 # recount every token from the original files with different code, and compare
-ccu cost-check             # estimated cost vs the cost Claude Code recorded
-ccu sessions --limit 10
-ccu quota
-ccu statusline-check       # rehearse the Claude quota helper on a copy of your settings; changes nothing
-ccu export --kind requests --format csv --out requests.csv
-ccu bench                  # import into a scratch database and time it
+tw import                 # Claude and Codex; incremental and idempotent (--provider claude|openai)
+tw totals
+tw verify                 # recount every token from the original files with different code, and compare
+tw cost-check             # estimated cost vs the cost Claude Code recorded
+tw sessions --limit 10
+tw quota
+tw statusline-check       # rehearse the Claude quota helper on a copy of your settings; changes nothing
+tw export --kind requests --format csv --out requests.csv
+tw bench                  # import into a scratch database and time it
 ```
 
-Use `--db PATH`, `--root PATH` (Claude) and `--codex-home PATH` (Codex) to work on other locations, or set `CLAUDE_USAGE_MONITOR_DATA_DIR` to run against a scratch data folder.
+Use `--db PATH`, `--root PATH` (Claude) and `--codex-home PATH` (Codex) to work on other locations, or set `TOKENWATCH_DATA_DIR` to run against a scratch data folder.
 
 ## Tests
 
@@ -121,7 +121,7 @@ swift test
 
 ## Privacy and security
 
-* No outbound network connections, no analytics, no telemetry. (Check with `lsof -i -a -p $(pgrep ClaudeUsageMonitor)`.)
+* No outbound network connections, no analytics, no telemetry. (Check with `lsof -i -a -p $(pgrep Tokenwatch)`.)
 * The line parser skips message content without decoding it. A test plants secrets in prompts, replies, tool output and titles and asserts they never reach the database, its WAL, or any export.
 * The status line helper stores only the rate-limit figures and session id, with `0600` permissions, and never exits non-zero.
 * The Claude Code `.key` files (peer tokens) and Codex's `auth.json` are never opened. No credentials are read, stored or transmitted. Account identifiers are stored only as one-way hashes.
@@ -170,7 +170,7 @@ Verified against Codex's own running counters, not only against a second count o
 
 Ordered by how much they can matter to you.
 
-1. **Claude quota has not been seen from a live subscription.** The helper is not installed in your Claude Code settings. The helper, evaluator and coordinator are tested end to end and `ccu statusline-check` rehearses the whole path on a copy of your settings, but until you install the helper and send one message in a terminal Claude Code session, the Claude quota stays "Unavailable". It is only reported while a terminal session is in use (VS Code and Desktop Code sessions do not run the status line), and only for subscribers.
+1. **Claude quota has not been seen from a live subscription.** The helper is not installed in your Claude Code settings. The helper, evaluator and coordinator are tested end to end and `tw statusline-check` rehearses the whole path on a copy of your settings, but until you install the helper and send one message in a terminal Claude Code session, the Claude quota stays "Unavailable". It is only reported while a terminal session is in use (VS Code and Desktop Code sessions do not run the status line), and only for subscribers.
 2. **Notifications are not verified as delivered.** macOS recorded a denial for the app on this Mac. The flow reports it correctly. Allow the app in System Settings → Notifications, then use the test button.
 3. **Only coding tools are observable.** claude.ai chat, Cowork, Claude Desktop chat, ChatGPT Chat and other devices consume quota but leave no local record. Local token totals can therefore be lower than your real consumption, and the dashboard says so.
 4. **Two accounts of one provider that the files do not name** (Claude always, Codex files written before an account id existed) share one pool. Their readings are kept as separate cycles when their reset times differ by more than 30 seconds, and nothing else can separate them.

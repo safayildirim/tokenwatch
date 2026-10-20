@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds "AI Usage Monitor.app" into ./build.
+# Builds "Tokenwatch.app" into ./build.
 #
 #   scripts/build-app.sh            optimized build for this Mac's architecture
 #   scripts/build-app.sh --universal  universal binary (arm64 + x86_64)
@@ -8,8 +8,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="AI Usage Monitor"
-BUNDLE_ID="dev.claudeusage.monitor"
+APP_NAME="Tokenwatch"
+BUNDLE_ID="dev.tokenwatch.app"
 VERSION="1.0.0"
 BUILD_DIR="build"
 APP="$BUILD_DIR/$APP_NAME.app"
@@ -18,9 +18,9 @@ ARCH_FLAGS=()
 if [[ "${1:-}" == "--universal" ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64); fi
 
 echo "==> Compiling (release)"
-swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product ClaudeUsageMonitor
-swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product ccu
-swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product ccu-statusline
+swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product Tokenwatch
+swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product tw
+swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product tw-statusline
 BIN_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "==> Assembling $APP"
@@ -29,9 +29,9 @@ mkdir -p "$BUILD_DIR"
 touch "$BUILD_DIR/.metadata_never_index"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN_DIR/ClaudeUsageMonitor" "$APP/Contents/MacOS/ClaudeUsageMonitor"
-cp "$BIN_DIR/ccu-statusline" "$APP/Contents/MacOS/ccu-statusline"
-cp "$BIN_DIR/ccu" "$APP/Contents/MacOS/ccu"
+cp "$BIN_DIR/Tokenwatch" "$APP/Contents/MacOS/Tokenwatch"
+cp "$BIN_DIR/tw-statusline" "$APP/Contents/MacOS/tw-statusline"
+cp "$BIN_DIR/tw" "$APP/Contents/MacOS/tw"
 
 echo "==> Icon"
 ICONSET="$BUILD_DIR/AppIcon.iconset"
@@ -45,7 +45,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
-    <key>CFBundleExecutable</key><string>ClaudeUsageMonitor</string>
+    <key>CFBundleExecutable</key><string>Tokenwatch</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
@@ -64,8 +64,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 echo "==> Signing (ad hoc)"
-codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/ccu-statusline"
-codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/ccu"
+codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/tw-statusline"
+codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/tw"
 codesign --force --sign - --timestamp=none --options runtime "$APP"
 codesign --verify --strict --verbose=1 "$APP" 2>&1 | tail -2
 

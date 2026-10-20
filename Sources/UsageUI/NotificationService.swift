@@ -117,7 +117,7 @@ public struct NotificationService: Sendable {
 
     /// A notification that has nothing to do with any quota, to check that delivery works.
     public func sendTest() async -> NotificationReport {
-        await deliver([AlertNotification(key: "test-\(UUID().uuidString)", kind: .threshold, title: "AI Usage Monitor",
+        await deliver([AlertNotification(key: "test-\(UUID().uuidString)", kind: .threshold, title: "Tokenwatch",
                                          body: "This is a test. Notifications are working.")])
     }
 }

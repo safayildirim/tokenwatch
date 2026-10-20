@@ -56,7 +56,7 @@ Findings come from inspecting this machine's real Claude installation (792 sessi
 ### Conclusions drawn from the Claude audit
 
 1. **Token usage** is available completely and locally for everything that runs through Claude Code. The transcripts are the single richest source, and they are the only one that exposes the cache write lifetime split.
-2. **Subscription quota** has exactly one documented, authoritative source: the `rate_limits` object that Claude Code passes to a configured status line command. Nothing else documented reports subscription utilization. The application therefore ships a tiny status line helper (`ccu-statusline`) as its authoritative quota source.
+2. **Subscription quota** has exactly one documented, authoritative source: the `rate_limits` object that Claude Code passes to a configured status line command. Nothing else documented reports subscription utilization. The application therefore ships a tiny status line helper (`tw-statusline`) as its authoritative quota source.
 3. **Quota is not derivable from tokens.** Anthropic does not document a conversion, and the account figure also includes usage the application cannot see. The application never computes a quota percentage from tokens. See [QUOTA.md](QUOTA.md).
 4. **OpenTelemetry** adds nothing that the transcripts do not already contain, but it needs a collector process to receive data. It is deliberately not implemented. The identity model (request keyed by the API message id, with the server `request_id` stored alongside) is compatible with it, so adding it later would not double count.
 5. **Claude Desktop Chat, Cowork, claude.ai and other devices cannot be monitored.** Their usage counts toward the account quota but leaves no local trace. This is shown in the interface and never hidden.
@@ -122,9 +122,9 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 | `UsageCore` | All collection, storage, accounting, quota and analytics logic. Imports no UI framework and names no provider outside the designated files. |
 | `CZstd` | The decompression half of Zstandard, vendored (Codex compresses older sessions and macOS has no usable `libzstd`). Provenance and checksum in `Sources/CZstd/README.md`. |
 | `UsageUI` | SwiftUI views and the observable `AppModel`. |
-| `ClaudeUsageMonitor` | The `@main` app, shown to users as **AI Usage Monitor**. |
-| `ccu` | Command line front end: import, verify, cost check, export, benchmark, for both providers. |
-| `ccu-statusline` | Status line helper that Claude Code runs. |
+| `Tokenwatch` | The `@main` app, shown to users as **Tokenwatch**. |
+| `tw` | Command line front end: import, verify, cost check, export, benchmark, for both providers. |
+| `tw-statusline` | Status line helper that Claude Code runs. |
 
 ## 6. Why these choices
 

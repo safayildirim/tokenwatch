@@ -1,6 +1,6 @@
 # Database schema and migrations
 
-The database is `~/Library/Application Support/ClaudeUsageMonitor/usage.sqlite` (SQLite, WAL mode, `STRICT` tables, foreign keys on). The authoritative definition is `Sources/UsageCore/Storage/Schema.swift`.
+The database is `~/Library/Application Support/Tokenwatch/usage.sqlite` (SQLite, WAL mode, `STRICT` tables, foreign keys on). The authoritative definition is `Sources/UsageCore/Storage/Schema.swift`.
 
 ## Conventions
 

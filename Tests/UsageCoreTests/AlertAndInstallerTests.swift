@@ -205,7 +205,7 @@ final class AlertEngineTests: XCTestCase {
 }
 
 final class StatusLineInstallerTests: XCTestCase {
-    private let bridge = URL(fileURLWithPath: "/Applications/Claude Usage Monitor.app/Contents/MacOS/ccu-statusline")
+    private let bridge = URL(fileURLWithPath: "/Applications/Tokenwatch.app/Contents/MacOS/tw-statusline")
 
     private func settingsFile(_ env: TestEnv, _ contents: String?) throws -> URL {
         let url = env.root.appendingPathComponent("claude/settings.json")
@@ -241,7 +241,7 @@ final class StatusLineInstallerTests: XCTestCase {
         let now = try json(url)
         XCTAssertEqual((now["statusLine"] as? [String: Any])?["type"] as? String, "command")
         let command = (now["statusLine"] as! [String: Any])["command"] as! String
-        XCTAssertTrue(command.contains("ccu-statusline"))
+        XCTAssertTrue(command.contains("tw-statusline"))
         XCTAssertFalse(command.contains("--chain"))
         // Every other setting is preserved, including its original text.
         let text = try String(contentsOf: url, encoding: .utf8)

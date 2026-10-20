@@ -15,7 +15,7 @@ public struct MenuBarLabel: View {
             if !title.text.isEmpty { Text(title.text).monospacedDigit() }
         }
         .help(title.tooltip)
-        .accessibilityLabel("AI usage \(title.text)")
+        .accessibilityLabel("Tokenwatch \(title.text)")
         // Opening the app again from Finder or the Applications folder asks for the dashboard, because a
         // menu bar app has no other visible response to that action.
         .onReceive(NotificationCenter.default.publisher(for: .openDashboardRequested)) { _ in
@@ -68,7 +68,7 @@ public struct MenuBarContentView: View {
     private var header: some View {
         HStack {
             Image(systemName: "sparkles")
-            Text("AI Usage").font(.headline)
+            Text("Tokenwatch").font(.headline)
             Spacer()
             if model.collectorSnapshot.isSyncing {
                 ProgressView().controlSize(.small)

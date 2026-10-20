@@ -39,10 +39,10 @@ public struct CodexAdapter: SourceAdapter {
     public init(home: URL = CodexAdapter.defaultHome) { self.home = CanonicalPath.resolve(home) }
 
     /// The folder Codex keeps its data in. The tests and experiments can redirect it with
-    /// `CLAUDE_USAGE_MONITOR_CODEX_DIR`. Otherwise `CODEX_HOME` applies, as it does for Codex itself.
+    /// `TOKENWATCH_CODEX_DIR`. Otherwise `CODEX_HOME` applies, as it does for Codex itself.
     public static var defaultHome: URL {
         let env = ProcessInfo.processInfo.environment
-        for name in ["CLAUDE_USAGE_MONITOR_CODEX_DIR", "CODEX_HOME"] {
+        for name in ["TOKENWATCH_CODEX_DIR", "CODEX_HOME"] {
             if let value = env[name], !value.isEmpty { return URL(fileURLWithPath: (value as NSString).expandingTildeInPath) }
         }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")

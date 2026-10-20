@@ -6,7 +6,7 @@
 
 help:
 	@echo "make install     Build the app, copy it to /Applications (or ~/Applications) and start it."
-	@echo "make build       Build build/AI Usage Monitor.app without installing it."
+	@echo "make build       Build build/Tokenwatch.app without installing it."
 	@echo "make universal   Build a universal (Apple silicon + Intel) app without installing it."
 	@echo "make launchagent Install a LaunchAgent that starts the app at login and restarts it after a crash."
 	@echo "make test        Run the test suite."

@@ -11,7 +11,7 @@ final class TestEnv {
 
     init(file: StaticString = #filePath) throws {
         // The temporary directory is resolved so that paths match what FSEvents reports.
-        root = CanonicalPath.resolve(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ccu-test-\(UUID().uuidString)"))
+        root = CanonicalPath.resolve(URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tw-test-\(UUID().uuidString)"))
         projects = root.appendingPathComponent("projects")
         dbURL = root.appendingPathComponent("db/usage.sqlite")
         try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)

@@ -20,12 +20,12 @@ Claude Code documents a `statusLine` setting. The configured command receives a 
 
 `resets_at` is Unix epoch seconds. Each window can be absent. The field appears only after the session's first API response, only for subscribers (not API-key users), and Claude Code drops a window once its reset time passes.
 
-The application ships a helper, `ccu-statusline`, that Claude Code runs as that command.
+The application ships a helper, `tw-statusline`, that Claude Code runs as that command.
 
 ### What the helper does
 
 1. Reads the JSON from standard input (bounded to 4 MB).
-2. Copies **only** the `rate_limits` windows, the session id, and a fingerprint into `~/Library/Application Support/ClaudeUsageMonitor/quota/statusline-<session>.json` (mode 0600, written atomically). The model, working directory, transcript path and cost are never stored.
+2. Copies **only** the `rate_limits` windows, the session id, and a fingerprint into `~/Library/Application Support/Tokenwatch/quota/statusline-<session>.json` (mode 0600, written atomically). The model, working directory, transcript path and cost are never stored.
 3. If the user already had a status line, runs it (`--chain`) with the identical input and passes its output through, so their existing status line looks and behaves the same. Otherwise it prints `5h 24% · 7d 41%`.
 4. Always exits 0, so it can never break the status line, even on garbage input.
 
@@ -60,14 +60,14 @@ The app does it from Settings → Quota (or the Quota page) after an explicit co
 * Invalid existing JSON, or a non-command status line, is never modified.
 * Removing the helper restores your original command.
 
-**Rehearsal that changes nothing:** `ccu statusline-check` reads your settings, installs the helper into a **copy**, shows the command that would be written, confirms the rest of the file is byte for byte the same and that uninstalling restores it exactly, then runs that command with a made-up payload and prints what the app would parse. It touches neither your settings nor your account.
+**Rehearsal that changes nothing:** `tw statusline-check` reads your settings, installs the helper into a **copy**, shows the command that would be written, confirms the rest of the file is byte for byte the same and that uninstalling restores it exactly, then runs that command with a made-up payload and prints what the app would parse. It touches neither your settings nor your account.
 
 The command written into `settings.json` points at the helper inside the app bundle. If the app is moved or deleted while the helper is installed, the status line command fails, so uninstall the helper (Settings → Quota) before removing the app.
 
 Manual setup, if you prefer: add this to `~/.claude/settings.json`:
 
 ```json
-"statusLine": { "type": "command", "command": "/Applications/AI Usage Monitor.app/Contents/MacOS/ccu-statusline" }
+"statusLine": { "type": "command", "command": "/Applications/Tokenwatch.app/Contents/MacOS/tw-statusline" }
 ```
 
 Settings in a project's `.claude/settings.json` or `settings.local.json` override the user file. A project that defines its own status line needs the same helper there.

@@ -7,7 +7,7 @@ One adapter (`CodexAdapter`) reads the session files of the Codex engine. The en
 * Read: the session header, `turn_context` and `thread_settings_applied` (for the model and service tier), `token_usage_record`, `token_count` events (usage and `rate_limits`) and `compacted` markers.
 * Skipped without being decoded: messages, reasoning, tool calls and tool output. A test plants sentinel text in them and asserts it never reaches the database.
 * Never opened: `auth.json` and every other file in the folder. The account identifier from the header is hashed before it is stored (`creator_account_id` → a 16-hex-digit digest), and a test asserts the raw value, the user id and the instructions never reach the database.
-* `$CODEX_HOME` is honoured, as Codex itself does. `CLAUDE_USAGE_MONITOR_CODEX_DIR` overrides it for tests. A GUI app does not inherit a shell's environment, so a non-default location is best set through that variable or `ccu --codex-home`.
+* `$CODEX_HOME` is honoured, as Codex itself does. `TOKENWATCH_CODEX_DIR` overrides it for tests. A GUI app does not inherit a shell's environment, so a non-default location is best set through that variable or `tw --codex-home`.
 
 ## File layout
 
@@ -81,7 +81,7 @@ Each `token_count` carries `rate_limits`: `limit_id`, `plan_type`, and up to two
 
 ## Validation on this Mac's real data
 
-`ccu verify --provider openai` recounts every session by Codex's own running counters (see above), with a different parser (Foundation JSON instead of the streaming scanner) and a different method (growth of a counter instead of per-response figures):
+`tw verify --provider openai` recounts every session by Codex's own running counters (see above), with a different parser (Foundation JSON instead of the streaming scanner) and a different method (growth of a counter instead of per-response figures):
 
 | | Recount | Database |
 |---|---|---|
@@ -105,4 +105,4 @@ Prices are the published API prices of the models seen in the files, with dates 
 * A response whose usage appears **only** in a `token_count` event, in a file that has usage records elsewhere, is counted from the event and reported. If Codex ever wrote a record and an event that disagree on their figures, both would be counted and the report would show the extra event. No such case exists in the data.
 * **Fork lineage depends on the parent's file.** Without it a fork falls back to the instant of the fork and says so. A fork whose parent had not yet written the copied lines when the fork was made would have those lines counted as its own (they are reported as written at the instant of the fork). The report on the session is not removed when the parent turns up later, until the fork's file is read again.
 * **Accounts.** Sessions written before Codex recorded an account id belong to the unassigned account. Readings of two real accounts that share it can alternate there (the history of this Mac contains such a period in July). They are kept apart as separate cycles when their reset times differ by more than 30 seconds, but nothing can tell the accounts apart.
-* `$CODEX_HOME` is read when the app starts. A GUI app does not inherit a shell's environment, so a non-default location needs `launchctl setenv CODEX_HOME …` and a restart, or `ccu --codex-home` for the command line.
+* `$CODEX_HOME` is read when the app starts. A GUI app does not inherit a shell's environment, so a non-default location needs `launchctl setenv CODEX_HOME …` and a restart, or `tw --codex-home` for the command line.

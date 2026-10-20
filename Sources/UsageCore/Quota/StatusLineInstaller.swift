@@ -136,7 +136,7 @@ public enum StatusLineInstaller {
         }
     }
 
-    public static let helperName = "ccu-statusline"
+    public static let helperName = "tw-statusline"
 
     /// Finds the helper binary shipped inside the app bundle (or next to the running executable during development).
     public static func locateBridge() -> URL? {

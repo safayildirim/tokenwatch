@@ -1,12 +1,12 @@
 import Foundation
 import UsageCore
 
-// Command line front end for the Claude usage monitor. It uses exactly the same core as the menu
+// Command line front end for Tokenwatch. It uses exactly the same core as the menu
 // bar app, which makes it suitable for headless imports, verification and performance measurement.
 
 func usage() -> Never {
     FileHandle.standardError.write(Data("""
-    usage: ccu <command> [options]
+    usage: tw <command> [options]
 
     commands:
       import      Import Claude Code and Codex history (incrementally; safe to repeat)
@@ -106,7 +106,7 @@ do {
         try printTotals(db: db)
 
     case "bench":
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("ccu-bench-\(UUID().uuidString).sqlite")
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("tw-bench-\(UUID().uuidString).sqlite")
         defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path.path + s) } }
         let db = try UsageDatabase.open(at: path)
         print("-- initial import")
@@ -244,7 +244,7 @@ do {
             print("helper binary: NOT FOUND (pass --bridge PATH)"); exit(1)
         }
         print("helper binary: \(helper.path)")
-        let scratch = fm.temporaryDirectory.appendingPathComponent("ccu-statusline-check-\(UUID().uuidString)")
+        let scratch = fm.temporaryDirectory.appendingPathComponent("tw-statusline-check-\(UUID().uuidString)")
         try fm.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: scratch) }
         let copy = scratch.appendingPathComponent("settings.json")
@@ -269,7 +269,7 @@ do {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", after.command ?? ShellQuote.quote(helper.path)]
-        process.environment = ["CLAUDE_USAGE_MONITOR_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"]
+        process.environment = ["TOKENWATCH_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"]
         let stdin = Pipe(), stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout

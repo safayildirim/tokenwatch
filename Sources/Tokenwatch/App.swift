@@ -3,7 +3,7 @@ import AppKit
 import UsageUI
 
 @main
-struct ClaudeUsageMonitorApp: App {
+struct TokenwatchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     @State private var model: AppModel?
@@ -34,7 +34,7 @@ struct ClaudeUsageMonitorApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("AI Usage", id: "dashboard") {
+        Window("Tokenwatch", id: "dashboard") {
             if let model {
                 DashboardView().environment(model).preferredColorScheme(model.settings.appearance.colorScheme)
             }

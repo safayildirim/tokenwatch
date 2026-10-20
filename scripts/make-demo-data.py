@@ -2,10 +2,10 @@
 """Generates a synthetic Claude Code and Codex history for demos, screenshots and experiments.
 
     scripts/make-demo-data.py /tmp/demo-claude 30 /tmp/demo-codex   # writes <claude>/projects/... and <codex>/sessions/...
-    CLAUDE_USAGE_MONITOR_CLAUDE_DIR=/tmp/demo-claude \
-    CLAUDE_USAGE_MONITOR_CODEX_DIR=/tmp/demo-codex \
-    CLAUDE_USAGE_MONITOR_DATA_DIR=/tmp/demo-data \
-    "/Applications/AI Usage Monitor.app/Contents/MacOS/ClaudeUsageMonitor"
+    TOKENWATCH_CLAUDE_DIR=/tmp/demo-claude \
+    TOKENWATCH_CODEX_DIR=/tmp/demo-codex \
+    TOKENWATCH_DATA_DIR=/tmp/demo-data \
+    "/Applications/Tokenwatch.app/Contents/MacOS/Tokenwatch"
 
 The third argument is optional. Without it only the Claude history is written.
 

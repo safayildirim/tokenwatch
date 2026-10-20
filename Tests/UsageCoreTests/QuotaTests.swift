@@ -200,10 +200,10 @@ final class StatusLineSourceTests: XCTestCase {
     }
 }
 
-/// Runs the real `ccu-statusline` helper binary.
+/// Runs the real `tw-statusline` helper binary.
 final class BridgeBinaryTests: XCTestCase {
     private var helper: URL {
-        Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("ccu-statusline")
+        Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("tw-statusline")
     }
 
     private func run(_ input: String, quotaDir: URL, arguments: [String] = []) throws -> (stdout: String, status: Int32) {
@@ -211,7 +211,7 @@ final class BridgeBinaryTests: XCTestCase {
         let p = Process()
         p.executableURL = helper
         p.arguments = arguments
-        p.environment = ["CLAUDE_USAGE_MONITOR_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin"]
+        p.environment = ["TOKENWATCH_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin"]
         let stdin = Pipe(), stdout = Pipe()
         p.standardInput = stdin
         p.standardOutput = stdout

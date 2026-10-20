@@ -505,7 +505,7 @@ public final class AppModel {
 
     /// One line per displayable window, grouped by provider, for the menu bar tooltip.
     private var quotaTooltip: String {
-        var lines = ["AI usage"]
+        var lines = ["Tokenwatch"]
         for provider in providers {
             let pools = quotaPools.filter { $0.pool.key.provider == provider.id }
             guard !pools.isEmpty else { continue }
@@ -620,7 +620,7 @@ public enum LoginItem {
 
 public extension Notification.Name {
     /// Posted when the user opens the app again while it is already running.
-    static let openDashboardRequested = Notification.Name("dev.claudeusage.monitor.openDashboardRequested")
+    static let openDashboardRequested = Notification.Name("dev.tokenwatch.app.openDashboardRequested")
 }
 
 /// Turns the system's "reopen" request into a request to show the dashboard.

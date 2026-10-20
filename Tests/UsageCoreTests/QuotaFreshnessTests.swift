@@ -191,14 +191,14 @@ final class QuotaFreshnessTests: XCTestCase {
 /// What the status line helper claims about the age of a reading it sees for the first time.
 final class StatusLineFirstSightTests: XCTestCase {
     private var helper: URL {
-        Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("ccu-statusline")
+        Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("tw-statusline")
     }
 
     private func run(_ input: String, quotaDir: URL) throws {
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: helper.path), "helper binary not built")
         let p = Process()
         p.executableURL = helper
-        p.environment = ["CLAUDE_USAGE_MONITOR_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin"]
+        p.environment = ["TOKENWATCH_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin"]
         let stdin = Pipe(), stdout = Pipe()
         p.standardInput = stdin
         p.standardOutput = stdout

@@ -5,17 +5,17 @@ public enum QuotaPaths {
     /// This enum names where the database and quota files live. The environment variable lets tests and
     /// experiments run against a scratch folder without touching the real data.
     public static var applicationSupport: URL {
-        if let override = ProcessInfo.processInfo.environment["CLAUDE_USAGE_MONITOR_DATA_DIR"], !override.isEmpty {
+        if let override = ProcessInfo.processInfo.environment["TOKENWATCH_DATA_DIR"], !override.isEmpty {
             return URL(fileURLWithPath: override)
         }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ClaudeUsageMonitor")
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Tokenwatch")
     }
     public static var bridgeDirectory: URL { applicationSupport.appendingPathComponent("quota") }
     public static var databaseURL: URL { applicationSupport.appendingPathComponent("usage.sqlite") }
     /// This is Claude Code's data folder (`~/.claude`). The environment variable points experiments and load
     /// tests at a scratch copy.
     public static var claudeHome: URL {
-        if let override = ProcessInfo.processInfo.environment["CLAUDE_USAGE_MONITOR_CLAUDE_DIR"], !override.isEmpty {
+        if let override = ProcessInfo.processInfo.environment["TOKENWATCH_CLAUDE_DIR"], !override.isEmpty {
             return URL(fileURLWithPath: override)
         }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")

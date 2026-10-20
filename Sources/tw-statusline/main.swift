@@ -72,9 +72,9 @@ func record(_ input: Data) -> String {
     let fingerprint = parts.joined(separator: "|")
 
     // Tests point the helper at a scratch folder through this variable.
-    let directory = ProcessInfo.processInfo.environment["CLAUDE_USAGE_MONITOR_QUOTA_DIR"].map { URL(fileURLWithPath: $0) }
+    let directory = ProcessInfo.processInfo.environment["TOKENWATCH_QUOTA_DIR"].map { URL(fileURLWithPath: $0) }
         ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/ClaudeUsageMonitor/quota")
+            .appendingPathComponent("Library/Application Support/Tokenwatch/quota")
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                              attributes: [.posixPermissions: 0o700])
     let file = directory.appendingPathComponent("statusline-\(safeID).json")

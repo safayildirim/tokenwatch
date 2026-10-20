@@ -401,12 +401,12 @@ private struct AboutSettings: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "sparkles").font(.system(size: 40)).foregroundStyle(Palette.series[1])
-            Text("AI Usage Monitor").font(.title2.weight(.semibold))
+            Text("Tokenwatch").font(.title2.weight(.semibold))
             Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development")").foregroundStyle(.secondary)
             Text("A local-first monitor for the usage of AI coding tools: Claude Code, and the Codex engine behind the Codex apps and ChatGPT Work. All data stays on this Mac.").multilineTextAlignment(.center).frame(maxWidth: 380)
             Divider().frame(width: 300)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Data folder: ~/Library/Application Support/ClaudeUsageMonitor").font(.caption)
+                Text("Data folder: ~/Library/Application Support/Tokenwatch").font(.caption)
                 Text("Reads: ~/.claude/projects and ~/.claude/sessions (Claude Code), ~/.codex/sessions and archived_sessions (Codex)").font(.caption)
                 Text("Never reads: credentials, message text, tool output").font(.caption)
                 Text("Network: none").font(.caption)

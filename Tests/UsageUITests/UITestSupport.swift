@@ -17,7 +17,7 @@ final class UIEnv {
     let model: AppModel
 
     init() throws {
-        root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ccu-ui-\(UUID().uuidString)")
+        root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tw-ui-\(UUID().uuidString)")
         projects = root.appendingPathComponent("projects")
         codexHome = root.appendingPathComponent("codex-home")
         quotaDir = root.appendingPathComponent("quota")

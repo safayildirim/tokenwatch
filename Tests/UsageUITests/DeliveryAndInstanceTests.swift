@@ -107,7 +107,7 @@ final class NotificationServiceTests: XCTestCase {
 
 final class SingleInstanceTests: XCTestCase {
     private func scratch() -> URL {
-        URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ccu-lock-\(UUID().uuidString)/app.lock")
+        URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tw-lock-\(UUID().uuidString)/app.lock")
     }
 
     func testOnlyOneHolderAtATimeAndTheLockIsFreeAgainAfterRelease() throws {

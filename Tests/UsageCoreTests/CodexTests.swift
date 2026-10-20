@@ -77,7 +77,7 @@ final class CodexDiscoveryTests: XCTestCase {
         // The default follows CODEX_HOME exactly as Codex itself does, unless a more specific override is present.
         let home = CodexAdapter.defaultHome
         let env = ProcessInfo.processInfo.environment
-        if let override = env["CLAUDE_USAGE_MONITOR_CODEX_DIR"] ?? env["CODEX_HOME"], !override.isEmpty {
+        if let override = env["TOKENWATCH_CODEX_DIR"] ?? env["CODEX_HOME"], !override.isEmpty {
             XCTAssertEqual(home.path, URL(fileURLWithPath: (override as NSString).expandingTildeInPath).path)
         } else {
             XCTAssertEqual(home.lastPathComponent, ".codex")

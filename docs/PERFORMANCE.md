@@ -18,7 +18,7 @@ The first measurements of an unoptimized build showed what mattered (see "What t
 
 ## Measurements
 
-### Import (`ccu bench`, scratch database)
+### Import (`tw bench`, scratch database)
 
 ```
 -- initial import
@@ -79,7 +79,7 @@ The first always-on build recomputed the full dashboard summaries on every file 
 * **Streaming and bounded.** Files are read in 4 MB chunks; a line is decoded in place and its large content is skipped without allocation. Memory does not grow with file size. Up to three files are parsed in parallel at utility priority, so an import does not compete with foreground work.
 * **Cheap checkpoints.** Reconciliation compares file metadata only.
 
-Memory behaviour during the app's own sampling shows no growth trend; run `ccu bench` and the Diagnostics page's resource panel to reproduce the numbers on your machine.
+Memory behaviour during the app's own sampling shows no growth trend; run `tw bench` and the Diagnostics page's resource panel to reproduce the numbers on your machine.
 
 
 ## Multi-provider measurements
@@ -87,7 +87,7 @@ Memory behaviour during the app's own sampling shows no growth trend; run `ccu b
 Same machine, release build, real history of both providers: Claude (793 files, 4.8 GB) and Codex (232 files, 862 MB uncompressed, 212 of them zstd-compressed).
 
 ```
--- initial import (ccu bench)
+-- initial import (tw bench)
 claude-code-transcripts: files=793 changed=793 bytes_read=4.827.545.587 lines=655.596 seconds=5.77 peak_rss_mb=31.5
 codex-rollouts:          files=232 changed=232 bytes_read=862.131.548   lines=31.481  seconds=1.44 peak_rss_mb=48.3
 -- second pass (nothing changed)

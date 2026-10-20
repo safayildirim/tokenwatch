@@ -36,52 +36,110 @@ public struct AnalyticsEngine: Sendable {
                 t.requests = agg.requests
                 t.tokens = agg.tokens
                 t.cost = agg.cost
-                t.sessions = Int(row.int(9))
+                t.coverage = agg.coverage
+                t.sessions = Int(row.int(CostSQL.aggregateWidth))
                 return t
             } ?? UsageTotals()
         }
     }
 
+    /// Summaries for the overview. `scope` narrows every figure to a provider, product, account or surface, and
+    /// carries no period, since the periods are the point of the overview.
     public func overview(now: Date = Date(), calendar: Calendar = .current, live: [String: LiveProcess] = [:],
-                         policy: StatusPolicy = StatusPolicy()) throws -> OverviewSnapshot {
+                         policy: StatusPolicy = StatusPolicy(), scope: UsageFilter = UsageFilter()) throws -> OverviewSnapshot {
         var o = OverviewSnapshot()
         o.computedAt = now
         let dayStart = calendar.startOfDay(for: now)
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? dayStart
         let monthStart = calendar.dateInterval(of: .month, for: now)?.start ?? dayStart
-        o.today = try totals(UsageFilter(from: dayStart))
-        o.thisWeek = try totals(UsageFilter(from: weekStart))
-        o.thisMonth = try totals(UsageFilter(from: monthStart))
+        func within(_ from: Date) -> UsageFilter { var f = scope; f.from = from; f.to = nil; return f }
+        o.today = try totals(within(dayStart))
+        o.thisWeek = try totals(within(weekStart))
+        o.thisMonth = try totals(within(monthStart))
         // All-time figures are only counts. Summing every token with prices attached would scan the
         // whole history on each refresh, and no screen needs those sums.
+        let w = scope.sessionConditions()
         let counts = try db.read { c in
-            (try c.scalarInt("SELECT count(*) FROM model_request") ?? 0, try c.scalarInt("SELECT count(*) FROM session") ?? 0)
+            let join = "FROM model_request r JOIN session s ON s.id = r.session_id LEFT JOIN project pj ON pj.id = s.project_id"
+            let clause = w.sql.isEmpty ? "" : "WHERE " + w.sql.joined(separator: " AND ")
+            return (try c.scalarInt("SELECT count(*) \(join) \(clause)", w.params) ?? 0,
+                    try c.scalarInt("SELECT count(*) FROM session s LEFT JOIN project pj ON pj.id = s.project_id \(clause)", w.params) ?? 0)
         }
         o.allTime.requests = Int(counts.0)
         o.allTime.sessions = Int(counts.1)
         o.totalSessions = Int(counts.1)
-        let sessions = try sessionRows(UsageFilter(from: Calendar.current.date(byAdding: .day, value: -2, to: now)),
-                                       now: now, live: live, policy: policy)
-        o.activeSessions = sessions.filter { $0.status.state == .active }.count
+        var recent = scope
+        recent.from = Calendar.current.date(byAdding: .day, value: -2, to: now)
+        let sessions = try sessionRows(recent, now: now, live: live, policy: policy)
+        let active = sessions.filter { $0.status.state == .active }
+        o.activeSessions = active.count
+        for session in active { o.activeSessionsByProvider[session.provider, default: 0] += 1 }
         return o
     }
 
     /// The number of sessions currently in the active state. This is cheap enough to run on every
     /// change, because it only looks at sessions that wrote recently plus the live process table.
-    public func activeSessionCount(now: Date = Date(), live: [String: LiveProcess] = [:], policy: StatusPolicy = StatusPolicy()) throws -> Int {
+    public func activeSessionCount(now: Date = Date(), live: [String: LiveProcess] = [:], policy: StatusPolicy = StatusPolicy(),
+                                   provider: ProviderID? = nil) throws -> Int {
         let floor = Clock.ms(now.addingTimeInterval(-policy.activeWithin))
-        let rows: [(String, Int64?, Int64?)] = try db.read { c in
-            try c.query("SELECT external_id, last_activity_at, observed_ended_at FROM session WHERE last_activity_at >= ?", [.int(floor)]) {
-                ($0.text(0), $0.intOrNil(1), $0.intOrNil(2))
-            }
+        let rows: [(String, Int64?, Int64?, String)] = try db.read { c in
+            try c.query("""
+                SELECT s.external_id, s.last_activity_at, s.observed_ended_at, p.provider_id
+                FROM session s JOIN product p ON p.id = s.product_id WHERE s.last_activity_at >= ?
+                """, [.int(floor)]) { ($0.text(0), $0.intOrNil(1), $0.intOrNil(2), $0.text(3)) }
         }
         var active = Set<String>()
-        for (id, last, ended) in rows
-        where SessionStatusResolver.resolve(now: now, lastActivityMs: last, observedEndedAtMs: ended, live: live[id], policy: policy).state == .active {
-            active.insert(id)
+        for (id, last, ended, owner) in rows where provider == nil || provider!.rawValue == owner {
+            let status = SessionStatusResolver.resolve(now: now, lastActivityMs: last, observedEndedAtMs: ended, live: live[id], policy: policy)
+            if status.state == .active { active.insert(id) }
         }
-        for (id, process) in live where process.activity == .busy { active.insert(id) }
+        // A live process is only counted for a provider once its session is known to the database.
+        if provider == nil {
+            for (id, process) in live where process.activity == .busy { active.insert(id) }
+        } else {
+            let known: Set<String> = try db.read { c in
+                Set(try c.query("SELECT s.external_id FROM session s JOIN product p ON p.id = s.product_id WHERE p.provider_id = ?",
+                                [.text(provider!.rawValue)]) { $0.text(0) })
+            }
+            for (id, process) in live where process.activity == .busy && known.contains(id) { active.insert(id) }
+        }
         return active.count
+    }
+
+    /// The providers that have written a session record since `date`. A provider that is being used is expected to
+    /// keep its quota figures fresh, which is what makes a silent feed worth a warning.
+    public func activeProviders(since date: Date) throws -> Set<ProviderID> {
+        try db.read { c in
+            Set(try c.query("""
+                SELECT DISTINCT p.provider_id FROM session s JOIN product p ON p.id = s.product_id WHERE s.last_activity_at >= ?
+                """, [.int(Clock.ms(date))]) { ProviderID(rawValue: $0.text(0)) })
+        }
+    }
+
+    /// The number of active sessions of each provider, counted cheaply from recent records and the live process table.
+    ///
+    /// A live process counts for the provider that owns its session. A process whose session has no record yet
+    /// is counted for `liveProvider`, the provider whose process registry it came from.
+    public func activeSessionCounts(now: Date = Date(), live: [String: LiveProcess] = [:], liveProvider: ProviderID? = nil,
+                                    policy: StatusPolicy = StatusPolicy()) throws -> [ProviderID: Int] {
+        let floor = Clock.ms(now.addingTimeInterval(-policy.activeWithin))
+        let rows: [(String, Int64?, Int64?, String)] = try db.read { c in
+            try c.query("""
+                SELECT s.external_id, s.last_activity_at, s.observed_ended_at, p.provider_id
+                FROM session s JOIN product p ON p.id = s.product_id
+                WHERE s.last_activity_at >= ? OR s.external_id IN (\(live.keys.isEmpty ? "''" : live.keys.map { _ in "?" }.joined(separator: ",")))
+                """, [.int(floor)] + live.keys.map { .text($0) }) { ($0.text(0), $0.intOrNil(1), $0.intOrNil(2), $0.text(3)) }
+        }
+        var counted = Set<String>()
+        var out: [ProviderID: Int] = [:]
+        for (id, last, ended, owner) in rows {
+            let status = SessionStatusResolver.resolve(now: now, lastActivityMs: last, observedEndedAtMs: ended, live: live[id], policy: policy)
+            if status.state == .active, counted.insert(id).inserted { out[ProviderID(rawValue: owner), default: 0] += 1 }
+        }
+        if let liveProvider {
+            for (id, process) in live where process.activity == .busy && counted.insert(id).inserted { out[liveProvider, default: 0] += 1 }
+        }
+        return out
     }
 
     /// When the most recent session record was written, across all sessions.
@@ -101,6 +159,7 @@ public struct AnalyticsEngine: Sendable {
         case .none: dimKey = "''"; dimLabel = "''"
         case .model: dimKey = "m.canonical"; dimLabel = "m.display_name"
         case .project: dimKey = "CAST(COALESCE(pj.id, 0) AS TEXT)"; dimLabel = "COALESCE(pj.name, 'No project')"
+        case .provider: dimKey = "m.provider_id"; dimLabel = "m.provider_id"
         }
         struct Raw { var bucket: Int64; var key: String; var label: String; var tokens: TokenCounts; var requests: Int; var cost: EstimatedCost }
         let rows: [Raw] = try db.read { c in
@@ -190,18 +249,45 @@ public struct AnalyticsEngine: Sendable {
         let w = filter.whereClause()
         var rows: [ModelUsageRow] = try db.read { c in
             try c.query("""
-                SELECT m.canonical, m.display_name, m.family, \(CostSQL.aggregateColumns)
+                SELECT m.canonical, m.display_name, m.family, m.provider_id, \(CostSQL.aggregateColumns)
                 \(Self.from) \(w.sql)
-                GROUP BY m.canonical
+                GROUP BY m.provider_id, m.canonical
                 """, w.params) { row in
-                let agg = CostSQL.readAggregate(row, from: 3)
-                return ModelUsageRow(canonical: row.text(0), displayName: row.text(1), family: row.text(2),
-                                     tokens: agg.tokens, requests: agg.requests, cost: agg.cost, tokenShare: 0)
+                let agg = CostSQL.readAggregate(row, from: 4)
+                return ModelUsageRow(provider: ProviderID(rawValue: row.text(3)), canonical: row.text(0),
+                                     displayName: row.text(1), family: row.text(2), tokens: agg.tokens,
+                                     requests: agg.requests, cost: agg.cost, coverage: agg.coverage, tokenShare: 0)
             }
         }
         let total = rows.reduce(Int64(0)) { $0 + $1.tokens.totalProcessed }
         for i in rows.indices where total > 0 { rows[i].tokenShare = Double(rows[i].tokens.totalProcessed) / Double(total) }
         return rows.sorted { $0.tokens.totalProcessed > $1.tokens.totalProcessed }
+    }
+
+    /// Usage per provider, or per product when `byProduct` is set. Providers are never merged into one figure by this
+    /// query, because their token counts come from different tokenizers.
+    public func providers(_ filter: UsageFilter = UsageFilter(), byProduct: Bool = false) throws -> [ProviderUsageRow] {
+        let w = filter.whereClause()
+        let group = byProduct ? "s.product_id" : "pd.provider_id"
+        return try db.read { c in
+            try c.query("""
+                SELECT pd.provider_id, \(byProduct ? "s.product_id" : "NULL"), \(CostSQL.aggregateColumns),
+                       count(DISTINCT r.session_id), max(r.requested_at)
+                FROM model_request r
+                JOIN session s ON s.id = r.session_id
+                JOIN product pd ON pd.id = s.product_id
+                JOIN model m ON m.id = r.model_id
+                LEFT JOIN project pj ON pj.id = s.project_id
+                \(CostSQL.join) \(w.sql)
+                GROUP BY \(group)
+                """, w.params) { row in
+                let agg = CostSQL.readAggregate(row, from: 2)
+                let after = 2 + CostSQL.aggregateWidth
+                return ProviderUsageRow(provider: ProviderID(rawValue: row.text(0)), product: row.textOrNil(1).map { ProductID(rawValue: $0) },
+                                        tokens: agg.tokens, requests: agg.requests, sessions: Int(row.int(after)), cost: agg.cost,
+                                        coverage: agg.coverage, lastActivity: row.intOrNil(after + 1).map { Clock.date(ms: $0) })
+            }.sorted { $0.tokens.totalProcessed > $1.tokens.totalProcessed }
+        }
     }
 
     public func projects(_ filter: UsageFilter = UsageFilter()) throws -> [ProjectUsageRow] {
@@ -214,9 +300,10 @@ public struct AnalyticsEngine: Sendable {
                 GROUP BY COALESCE(pj.id, 0)
                 """, w.params) { row in
                 let agg = CostSQL.readAggregate(row, from: 3)
+                let after = 3 + CostSQL.aggregateWidth
                 return ProjectUsageRow(id: row.int(0), name: row.text(1), path: row.textOrNil(2), tokens: agg.tokens,
-                                       requests: agg.requests, sessions: Int(row.int(12)), cost: agg.cost,
-                                       lastActivity: row.intOrNil(13).map { Clock.date(ms: $0) }, tokenShare: 0)
+                                       requests: agg.requests, sessions: Int(row.int(after)), cost: agg.cost,
+                                       lastActivity: row.intOrNil(after + 1).map { Clock.date(ms: $0) }, tokenShare: 0)
             }
         }
         let total = rows.reduce(Int64(0)) { $0 + $1.tokens.totalProcessed }
@@ -236,13 +323,17 @@ public struct AnalyticsEngine: Sendable {
 
         let rows: [SessionRow] = try db.read { c in
             try c.query("""
-                SELECT s.id, s.external_id, s.source_id, pj.id, COALESCE(pj.name, 'No project'), pj.path,
-                       s.application, s.client_version, s.cwd, s.started_at, s.last_activity_at,
+                SELECT s.id, s.external_id, s.product_id, pd.provider_id, s.telemetry_source_id, s.account_id,
+                       COALESCE(ac.label, 'Unassigned'), s.surface_id, s.kind,
+                       pj.id, COALESCE(pj.name, 'No project'), pj.path,
+                       s.client_version, s.cwd, s.started_at, s.last_activity_at,
                        s.observed_ended_at, s.reported_cost_micros,
                        \(CostSQL.aggregateColumns),
                        COALESCE(sum(CASE WHEN r.agent_key IS NOT NULL THEN 1 ELSE 0 END), 0),
                        count(DISTINCT r.agent_key)
                 FROM session s
+                JOIN product pd ON pd.id = s.product_id
+                JOIN account ac ON ac.id = s.account_id
                 LEFT JOIN project pj ON pj.id = s.project_id
                 LEFT JOIN model_request r ON \(joinCond)
                 LEFT JOIN model m ON m.id = r.model_id
@@ -251,21 +342,26 @@ public struct AnalyticsEngine: Sendable {
                 GROUP BY s.id
                 \(having)
                 """, req.params + ses.params) { row in
-                let agg = CostSQL.readAggregate(row, from: 13)
-                let started = row.intOrNil(9)
-                let last = row.intOrNil(10)
-                let ended = row.intOrNil(11)
+                let agg = CostSQL.readAggregate(row, from: 18)
+                let after = 18 + CostSQL.aggregateWidth
+                let started = row.intOrNil(14)
+                let last = row.intOrNil(15)
+                let ended = row.intOrNil(16)
                 let externalID = row.text(1)
                 let status = SessionStatusResolver.resolve(now: now, lastActivityMs: last, observedEndedAtMs: ended,
                                                            live: live[externalID], policy: policy)
                 return SessionRow(
-                    id: row.int(0), externalID: externalID, sourceID: row.text(2), projectID: row.intOrNil(3),
-                    projectName: row.text(4), projectPath: row.textOrNil(5), application: row.textOrNil(6),
-                    clientVersion: row.textOrNil(7), cwd: row.textOrNil(8),
+                    id: row.int(0), externalID: externalID, productID: ProductID(rawValue: row.text(2)),
+                    provider: ProviderID(rawValue: row.text(3)), sourceID: TelemetrySourceID(rawValue: row.text(4)),
+                    accountID: row.int(5), accountLabel: row.text(6), surface: row.textOrNil(7).map { SurfaceID(rawValue: $0) },
+                    kind: SessionKind(rawValue: row.text(8)) ?? .main, projectID: row.intOrNil(9),
+                    projectName: row.text(10), projectPath: row.textOrNil(11),
+                    clientVersion: row.textOrNil(12), cwd: row.textOrNil(13),
                     startedAt: started.map { Clock.date(ms: $0) }, lastActivityAt: last.map { Clock.date(ms: $0) },
                     observedEndedAt: ended.map { Clock.date(ms: $0) }, tokens: agg.tokens, requests: agg.requests,
-                    agentRequests: Int(row.int(22)), agentCount: Int(row.int(23)), cost: agg.cost,
-                    reportedCostUSD: row.intOrNil(12).map { Double($0) / 1_000_000 }, models: [], status: status)
+                    agentRequests: Int(row.int(after)), agentCount: Int(row.int(after + 1)), cost: agg.cost,
+                    coverage: agg.coverage,
+                    reportedCostUSD: row.intOrNil(17).map { Double($0) / 1_000_000 }, models: [], status: status)
             }
         }
         // Collect the model names of each session, ordered by how much each model was used.
@@ -273,7 +369,7 @@ public struct AnalyticsEngine: Sendable {
             let mr = req
             let cond = (["1 = 1"] + mr.sql).joined(separator: " AND ")
             let pairs = try c.query("""
-                SELECT r.session_id, m.display_name, sum(r.output_tokens + r.input_tokens + r.cache_creation_tokens) AS w
+                SELECT r.session_id, m.display_name, sum(r.output_tokens + COALESCE(r.uncached_input_tokens, 0) + COALESCE(r.cache_creation_tokens, 0)) AS w
                 FROM model_request r JOIN model m ON m.id = r.model_id
                 WHERE \(cond)
                 GROUP BY r.session_id, m.id
@@ -306,7 +402,8 @@ public struct AnalyticsEngine: Sendable {
         if count <= Int64(Self.maxTimelinePoints) {
             let points: [RequestPoint] = try db.read { c in
                 try c.query("""
-                    SELECT r.id, r.requested_at, r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens,
+                    SELECT r.id, r.requested_at, COALESCE(r.uncached_input_tokens, 0), r.output_tokens,
+                           COALESCE(r.cache_read_tokens, 0), COALESCE(r.cache_creation_tokens, 0),
                            m.display_name, r.agent_key IS NOT NULL
                     FROM model_request r JOIN model m ON m.id = r.model_id
                     WHERE r.session_id = ? ORDER BY r.requested_at, r.id
@@ -324,8 +421,8 @@ public struct AnalyticsEngine: Sendable {
         let bucket = max(1000, span / Int64(Self.maxTimelinePoints))
         let points: [RequestPoint] = try db.read { c in
             try c.query("""
-                SELECT r.requested_at / ? AS b, min(r.requested_at), sum(r.input_tokens), sum(r.output_tokens),
-                       sum(r.cache_read_tokens), sum(r.cache_creation_tokens), count(*), 'Multiple'
+                SELECT r.requested_at / ? AS b, min(r.requested_at), sum(COALESCE(r.uncached_input_tokens, 0)), sum(r.output_tokens),
+                       sum(COALESCE(r.cache_read_tokens, 0)), sum(COALESCE(r.cache_creation_tokens, 0)), count(*), 'Multiple'
                 FROM model_request r WHERE r.session_id = ? GROUP BY b ORDER BY b
                 """, [.int(bucket), .int(sessionID)]) { row in
                 RequestPoint(id: Int(row.int(0)), time: Clock.date(ms: row.int(1)),
@@ -346,11 +443,11 @@ public struct AnalyticsEngine: Sendable {
                 """, [.int(sessionID)]) { row -> AgentUsage in
                 let agg = CostSQL.readAggregate(row, from: 1)
                 return AgentUsage(key: row.textOrNil(0), tokens: agg.tokens, requests: agg.requests,
-                                  firstSeen: row.intOrNil(10).map { Clock.date(ms: $0) },
-                                  lastSeen: row.intOrNil(11).map { Clock.date(ms: $0) }, cost: agg.cost, topModel: "")
+                                  firstSeen: row.intOrNil(1 + CostSQL.aggregateWidth).map { Clock.date(ms: $0) },
+                                  lastSeen: row.intOrNil(2 + CostSQL.aggregateWidth).map { Clock.date(ms: $0) }, cost: agg.cost, topModel: "")
             }
             let top = try c.query("""
-                SELECT r.agent_key, m.display_name, sum(r.input_tokens + r.output_tokens + r.cache_creation_tokens) AS w
+                SELECT r.agent_key, m.display_name, sum(COALESCE(r.uncached_input_tokens, 0) + r.output_tokens + COALESCE(r.cache_creation_tokens, 0)) AS w
                 FROM model_request r JOIN model m ON m.id = r.model_id WHERE r.session_id = ?
                 GROUP BY r.agent_key, m.id ORDER BY w DESC
                 """, [.int(sessionID)]) { ($0.textOrNil(0), $0.text(1)) }
@@ -363,43 +460,43 @@ public struct AnalyticsEngine: Sendable {
 
     // MARK: Quota window context
 
-    /// The five-hour and seven-day windows, as delimited by authoritative quota snapshots, that
-    /// overlap a session, together with how much of the locally observed activity in each window
-    /// belongs to the session.
+    /// The quota windows, as delimited by authoritative quota snapshots, that overlap a session, together
+    /// with how much of the locally observed activity in each window belongs to the session.
+    ///
+    /// Only windows of the session's own account are considered, and only pools that its product draws on.
+    /// The locally observed activity in a window is that of the same account and of every product in the pool.
     private func windowContexts(for session: SessionRow) throws -> [QuotaWindowContext] {
         guard let start = session.startedAt, let end = session.lastActivityAt else { return [] }
-        let durations: [(String, TimeInterval)] = [("five_hour", 5 * 3600), ("seven_day", 7 * 86400)]
+        struct Cycle { var poolKey: String; var windowKey: String; var minutes: Int; var resetsMs: Int64; var peak: Double? }
+        let cycles: [Cycle] = try db.read { c in
+            try c.query("""
+                SELECT p.pool_key, w.window_key, w.duration_minutes, cy.resets_at, max(sn.utilization_pct)
+                FROM quota_cycle cy
+                JOIN quota_window w ON w.id = cy.window_id
+                JOIN quota_pool p ON p.id = w.pool_id
+                JOIN pool_membership pm ON pm.provider_id = p.provider_id AND pm.pool_key = p.pool_key AND pm.product_id = ?
+                LEFT JOIN quota_snapshot sn ON sn.cycle_id = cy.id AND sn.authority = 'authoritative'
+                WHERE p.account_id = ? AND w.duration_minutes IS NOT NULL AND cy.resets_at IS NOT NULL
+                GROUP BY cy.id
+                """, [.text(session.productID.rawValue), .int(session.accountID)]) { row in
+                Cycle(poolKey: row.text(0), windowKey: row.text(1), minutes: Int(row.int(2)), resetsMs: row.int(3), peak: row.doubleOrNil(4))
+            }
+        }
         var out: [QuotaWindowContext] = []
-        for (kind, length) in durations {
-            let resets: [Int64] = try db.read { c in
-                try c.query("""
-                    SELECT DISTINCT resets_at FROM quota_snapshot
-                    WHERE window_kind = ? AND authority = 'authoritative' AND resets_at IS NOT NULL
-                    ORDER BY resets_at
-                    """, [.text(kind)]) { $0.int(0) }
-            }
-            // Snapshots of the same window report resets that differ by a few seconds.
-            var windowEnds: [Int64] = []
-            for r in resets where windowEnds.last.map({ r - $0 > 10 * 60_000 }) ?? true { windowEnds.append(r) }
-            for endMs in windowEnds {
-                let wEnd = Clock.date(ms: endMs)
-                let wStart = wEnd.addingTimeInterval(-length)
-                guard wEnd > start, wStart < end else { continue }
-                let peak = try db.read { c in
-                    try c.queryOne("""
-                        SELECT max(utilization_pct) FROM quota_snapshot
-                        WHERE window_kind = ? AND authority = 'authoritative' AND resets_at BETWEEN ? AND ?
-                        """, [.text(kind), .int(endMs - 10 * 60_000), .int(endMs + 10 * 60_000)]) { $0.doubleOrNil(0) } ?? nil
-                }
-                var windowFilter = UsageFilter(from: wStart, to: wEnd)
-                let local = try totals(windowFilter)
-                windowFilter.sessionIDs = [session.id]
-                let mine = try totals(windowFilter)
-                out.append(QuotaWindowContext(kind: kind, windowStart: wStart, windowEnd: wEnd,
-                                              reportedPeakUtilization: peak, sessionTokens: mine.tokens,
-                                              localWindowTokens: local.tokens, sessionCost: mine.cost,
-                                              localWindowCost: local.cost))
-            }
+        for cycle in cycles {
+            let wEnd = Clock.date(ms: cycle.resetsMs)
+            let wStart = wEnd.addingTimeInterval(-Double(cycle.minutes) * 60)
+            guard wEnd > start, wStart < end else { continue }
+            var windowFilter = UsageFilter(from: wStart, to: wEnd)
+            windowFilter.accounts = [session.accountID]
+            windowFilter.products = Set(db.registry.pool(provider: session.provider, key: cycle.poolKey)?.products ?? [session.productID])
+            let local = try totals(windowFilter)
+            windowFilter.sessionIDs = [session.id]
+            let mine = try totals(windowFilter)
+            out.append(QuotaWindowContext(poolKey: cycle.poolKey, windowKey: cycle.windowKey, windowMinutes: cycle.minutes,
+                                          windowStart: wStart, windowEnd: wEnd, reportedPeakUtilization: cycle.peak,
+                                          sessionTokens: mine.tokens, localWindowTokens: local.tokens,
+                                          sessionCost: mine.cost, localWindowCost: local.cost))
         }
         return out.sorted { $0.windowEnd > $1.windowEnd }.prefix(6).map { $0 }
     }
@@ -407,25 +504,43 @@ public struct AnalyticsEngine: Sendable {
     // MARK: Filter pickers
 
     public struct FilterOptions: Sendable, Equatable {
+        public struct AccountOption: Sendable, Equatable, Identifiable {
+            public var id: Int64
+            public var provider: ProviderID
+            public var label: String
+        }
         public var projects: [(id: Int64, name: String)] = []
         public var models: [(canonical: String, displayName: String)] = []
-        public var sources: [String] = []
-        public var applications: [String] = []
+        public var providers: [ProviderID] = []
+        public var products: [ProductID] = []
+        public var accounts: [AccountOption] = []
+        public var surfaces: [SurfaceID] = []
+        public var sources: [TelemetrySourceID] = []
         public init() {}
 
         public static func == (a: FilterOptions, b: FilterOptions) -> Bool {
             a.projects.map(\.id) == b.projects.map(\.id) && a.models.map(\.canonical) == b.models.map(\.canonical)
-                && a.sources == b.sources && a.applications == b.applications
+                && a.providers == b.providers && a.products == b.products && a.accounts == b.accounts
+                && a.surfaces == b.surfaces && a.sources == b.sources
         }
     }
 
+    /// Lists the values that exist in the stored data, so that a filter never offers a choice with no results.
     public func filterOptions() throws -> FilterOptions {
         try db.read { c in
             var o = FilterOptions()
             o.projects = try c.query("SELECT id, name FROM project ORDER BY name COLLATE NOCASE") { ($0.int(0), $0.text(1)) }
             o.models = try c.query("SELECT canonical, min(display_name) FROM model GROUP BY canonical ORDER BY canonical") { ($0.text(0), $0.text(1)) }
-            o.sources = try c.query("SELECT id FROM usage_source ORDER BY id") { $0.text(0) }
-            o.applications = try c.query("SELECT DISTINCT application FROM session WHERE application IS NOT NULL ORDER BY application") { $0.text(0) }
+            o.products = try c.query("SELECT DISTINCT product_id FROM session ORDER BY product_id") { ProductID(rawValue: $0.text(0)) }
+            o.providers = try c.query("""
+                SELECT DISTINCT p.provider_id FROM session s JOIN product p ON p.id = s.product_id ORDER BY p.provider_id
+                """) { ProviderID(rawValue: $0.text(0)) }
+            o.accounts = try c.query("""
+                SELECT DISTINCT a.id, a.provider_id, COALESCE(a.label, 'Unassigned') FROM session s JOIN account a ON a.id = s.account_id
+                ORDER BY a.provider_id, a.label
+                """) { FilterOptions.AccountOption(id: $0.int(0), provider: ProviderID(rawValue: $0.text(1)), label: $0.text(2)) }
+            o.surfaces = try c.query("SELECT DISTINCT surface_id FROM session WHERE surface_id IS NOT NULL ORDER BY surface_id") { SurfaceID(rawValue: $0.text(0)) }
+            o.sources = try c.query("SELECT DISTINCT telemetry_source_id FROM session ORDER BY telemetry_source_id") { TelemetrySourceID(rawValue: $0.text(0)) }
             return o
         }
     }

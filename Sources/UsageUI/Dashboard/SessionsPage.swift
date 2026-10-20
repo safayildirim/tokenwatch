@@ -6,7 +6,6 @@ struct SessionFilterState: Equatable {
     var search = ""
     var projectIDs: Set<Int64> = []
     var models: Set<String> = []
-    var applications: Set<String> = []
     var statuses: Set<SessionState> = []
     var range = RangeSelection(preset: .all)
 
@@ -15,7 +14,6 @@ struct SessionFilterState: Equatable {
         f.search = search
         f.projectIDs = projectIDs
         f.models = models
-        f.applications = applications
         return f
     }
 
@@ -25,7 +23,7 @@ struct SessionFilterState: Equatable {
     }
 
     var isFiltering: Bool {
-        !search.isEmpty || !projectIDs.isEmpty || !models.isEmpty || !applications.isEmpty || !statuses.isEmpty || range.preset != .all
+        !search.isEmpty || !projectIDs.isEmpty || !models.isEmpty || !statuses.isEmpty || range.preset != .all
     }
 }
 
@@ -59,7 +57,7 @@ struct SessionsPage: View {
         }
     }
 
-    private var reloadKey: String { "\(filter.usageFilter.hashValueDescription)|\(model.dataVersion)" }
+    private var reloadKey: String { "\(filter.usageFilter.hashValueDescription)|\(model.dataVersion)|\(model.scopeVersion)" }
 
     private var visible: [SessionRow] { filter.apply(to: rows).sorted(using: sortOrder) }
 
@@ -100,7 +98,6 @@ struct SessionsPage: View {
 
             multiMenu("Project", selection: $filter.projectIDs, items: options.projects.map { ($0.id, $0.name) })
             multiMenu("Model", selection: $filter.models, items: options.models.map { ($0.canonical, $0.displayName) })
-            multiMenu("Source", selection: $filter.applications, items: options.applications.map { ($0, Fmt.applicationName($0)) })
             multiMenu("Status", selection: $filter.statuses, items: SessionState.allCases.map { ($0, $0.label) })
             RangePicker(selection: $filter.range)
             Spacer()
@@ -127,13 +124,20 @@ struct SessionsPage: View {
     private var identityColumns: some TableColumnContent<SessionRow, KeyPathComparator<SessionRow>> {
         TableColumn("Session", value: \.sortProject) { (s: SessionRow) in
             HStack(spacing: 6) {
-                Image(systemName: Fmt.applicationSymbol(s.application)).foregroundStyle(.secondary).frame(width: 14)
+                Image(systemName: model.surfaceSymbol(s.surface)).foregroundStyle(.secondary).frame(width: 14)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(s.projectName).lineLimit(1)
                     Text(s.shortID).font(.caption2).foregroundStyle(.secondary).monospaced()
                 }
             }
         }.width(min: 130, ideal: 160)
+        TableColumn("Product", value: \.sortProduct) { (s: SessionRow) in
+            VStack(alignment: .leading, spacing: 0) {
+                Text(model.productName(s.productID)).lineLimit(1)
+                Text(s.accountLabel == "Unassigned" ? model.surfaceName(s.surface) : "\(model.surfaceName(s.surface)) · \(s.accountLabel)")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }.width(min: 110, ideal: 140)
         TableColumn("Model", value: \.sortModel) { (s: SessionRow) in
             Text(modelLabel(s))
         }.width(min: 80, ideal: 100)
@@ -209,7 +213,7 @@ struct SessionsPage: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        let f = filter.usageFilter
+        let f = model.scoped(filter.usageFilter)
         let policy = model.policy
         let live = model.live
         do {
@@ -225,13 +229,14 @@ struct SessionsPage: View {
 extension UsageFilter {
     /// A string that changes whenever the filter changes, for use as a task identity.
     var hashValueDescription: String {
-        "\(from?.timeIntervalSince1970 ?? 0)|\(to?.timeIntervalSince1970 ?? 0)|\(projectIDs.sorted())|\(models.sorted())|\(sources.sorted())|\(applications.sorted())|\(search)"
+        "\(from?.timeIntervalSince1970 ?? 0)|\(to?.timeIntervalSince1970 ?? 0)|\(projectIDs.sorted())|\(models.sorted())|\(search)"
     }
 }
 
 // These sort keys for the table are kept next to the view that uses them.
 extension SessionRow {
     var sortProject: String { projectName.lowercased() }
+    var sortProduct: String { productID.rawValue }
     var sortModel: String { models.first ?? "" }
     var sortStarted: Date { startedAt ?? .distantPast }
     var sortLastActivity: Date { lastActivityAt ?? .distantPast }

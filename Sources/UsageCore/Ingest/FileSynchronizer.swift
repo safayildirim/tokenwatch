@@ -44,6 +44,9 @@ struct FileCheckpoint {
 ///   rewrites (changed leading bytes), and re-reads the file from the start in those cases.
 /// - It streams through the file in fixed-size chunks, so memory use is bounded no matter how
 ///   large the file is.
+/// - It reads Zstandard-compressed files (`.zst`) through a streaming decoder. A compressed file is
+///   immutable, so it is never resumed: whenever it is new or has changed, it is decoded from its start.
+///   For such files the checkpoint offset counts decompressed bytes.
 public struct FileSynchronizer: Sendable {
     public static let chunkBytes = 4 << 20
     /// A single line larger than this is skipped instead of buffered.
@@ -63,13 +66,13 @@ public struct FileSynchronizer: Sendable {
 
     // MARK: Checkpoint access
 
-    func loadCheckpoint(sourceID: String, path: String) throws -> FileCheckpoint? {
+    func loadCheckpoint(sourceID: TelemetrySourceID, path: String) throws -> FileCheckpoint? {
         try db.read { c in
             try c.queryOne("""
                 SELECT id, COALESCE(device, 0), COALESCE(inode, 0), size, mtime_ms, consumed_offset,
                        head_len, head_hash, status
                 FROM source_file WHERE source_id = ? AND path = ?
-                """, [.text(sourceID), .text(path)]) { r in
+                """, [.text(sourceID.rawValue), .text(path)]) { r in
                 FileCheckpoint(id: r.int(0), device: r.int(1), inode: r.int(2), size: r.int(3), mtimeMs: r.int(4),
                                consumedOffset: r.int(5), headLen: Int(r.int(6)), headHash: r.textOrNil(7),
                                status: r.text(8))
@@ -79,13 +82,13 @@ public struct FileSynchronizer: Sendable {
 
     /// All checkpoints of a source keyed by path, used by reconciliation to decide cheaply which
     /// files need attention.
-    func loadAllCheckpoints(sourceID: String) throws -> [String: FileCheckpoint] {
+    func loadAllCheckpoints(sourceID: TelemetrySourceID) throws -> [String: FileCheckpoint] {
         try db.read { c in
             let rows = try c.query("""
                 SELECT path, id, COALESCE(device, 0), COALESCE(inode, 0), size, mtime_ms, consumed_offset,
                        head_len, head_hash, status
                 FROM source_file WHERE source_id = ?
-                """, [.text(sourceID)]) { r in
+                """, [.text(sourceID.rawValue)]) { r in
                 (r.text(0), FileCheckpoint(id: r.int(1), device: r.int(2), inode: r.int(3), size: r.int(4),
                                            mtimeMs: r.int(5), consumedOffset: r.int(6), headLen: Int(r.int(7)),
                                            headHash: r.textOrNil(8), status: r.text(9)))
@@ -94,24 +97,23 @@ public struct FileSynchronizer: Sendable {
         }
     }
 
-    private func ensureCheckpointRow(sourceID: String, path: String) throws -> Int64 {
+    private func ensureCheckpointRow(sourceID: TelemetrySourceID, path: String) throws -> Int64 {
         try db.write { c in
-            try c.run("INSERT OR IGNORE INTO usage_source(id, display_name) VALUES(?, ?)", [.text(sourceID), .text(sourceID)])
-            try c.run("INSERT OR IGNORE INTO source_file(source_id, path) VALUES(?, ?)", [.text(sourceID), .text(path)])
+            try c.run("INSERT OR IGNORE INTO source_file(source_id, path) VALUES(?, ?)", [.text(sourceID.rawValue), .text(path)])
             return try c.scalarInt("SELECT id FROM source_file WHERE source_id = ? AND path = ?",
-                                   [.text(sourceID), .text(path)])!
+                                   [.text(sourceID.rawValue), .text(path)])!
         }
     }
 
-    private func setStatus(sourceID: String, path: String, status: String, error: String?) {
+    private func setStatus(sourceID: TelemetrySourceID, path: String, status: String, error: String?) {
         _ = try? db.write { c in
             try c.run("UPDATE source_file SET status = ?, last_error = ?, last_synced_at = ? WHERE source_id = ? AND path = ?",
-                      [.text(status), .optional(error), .int(Clock.nowMs()), .text(sourceID), .text(path)])
+                      [.text(status), .optional(error), .int(Clock.nowMs()), .text(sourceID.rawValue), .text(path)])
         }
     }
 
     /// Records that a previously known file no longer exists. Its data stays in the database.
-    func markMissing(sourceID: String, path: String) {
+    func markMissing(sourceID: TelemetrySourceID, path: String) {
         setStatus(sourceID: sourceID, path: path, status: "missing", error: nil)
     }
 
@@ -157,19 +159,27 @@ public struct FileSynchronizer: Sendable {
         }
         let newHeadHash = FNV.hash(head, count: headLen)
 
+        let compressed = file.isCompressed
+        // A compressed file cannot be resumed, and neither can a file whose adapter needs to see it from the top.
+        let readsWholeFile = compressed || !adapter.resumesFromCheckpoint
         var startOffset: Int64 = 0
         var reason: String?
         if let cp = existing {
+            // A file that could not be decoded stays marked as damaged until it changes, so that it is
+            // not decoded again on every pass.
+            let settled = cp.status == "ok" || (compressed && cp.status == "damaged")
             if cp.status == "pending" && cp.consumedOffset == 0 {
                 startOffset = 0
             } else if cp.inode != inode || cp.device != device {
                 reason = "replaced"
-            } else if size < cp.consumedOffset {
+            } else if !compressed && size < cp.consumedOffset {
                 reason = "truncated"
             } else if cp.headLen > 0, cp.headHash != FNV.hash(head, count: min(cp.headLen, headLen)) || cp.headLen > headLen {
                 reason = "rewritten"
-            } else if size == cp.size && mtimeMs == cp.mtimeMs && cp.status == "ok" {
+            } else if size == cp.size && mtimeMs == cp.mtimeMs && settled {
                 return SyncResult(outcome: .unchanged)
+            } else if readsWholeFile {
+                startOffset = 0
             } else {
                 startOffset = cp.consumedOffset
             }
@@ -190,15 +200,26 @@ public struct FileSynchronizer: Sendable {
         var linesSinceCommit = 0
         var malformedSinceCommit = 0
 
-        if lseek(fd, off_t(startOffset), SEEK_SET) < 0 {
+        if lseek(fd, off_t(compressed ? 0 : startOffset), SEEK_SET) < 0 {
             throw FileAccessError(path: file.path, message: String(cString: strerror(errno)), code: errno)
+        }
+        let zstd: ZstdFileReader? = try compressed ? ZstdFileReader(fd: fd) : nil
+        // The next chunk of file content, decoded when the file is compressed.
+        func readChunk(into dst: UnsafeMutablePointer<UInt8>) throws -> Int {
+            if let zstd { return try zstd.read(into: dst, capacity: Self.chunkBytes) }
+            while true {
+                let n = read(fd, dst, Self.chunkBytes)
+                if n < 0 && errno == EINTR { continue }
+                if n < 0 { throw FileAccessError(path: file.path, message: String(cString: strerror(errno)), code: errno) }
+                return n
+            }
         }
 
         func commit(final: Bool) throws {
             parser.flush(into: &batch)
             malformedSinceCommit += batch.malformedLineCount + batch.oversizedLineCount
             let update = CheckpointUpdate(
-                fileID: fileID, device: device, inode: inode, size: max(size, bufOffset), mtimeMs: mtimeMs,
+                fileID: fileID, device: device, inode: inode, size: compressed ? size : max(size, bufOffset), mtimeMs: mtimeMs,
                 consumedOffset: bufOffset, headLen: headLen, headHash: newHeadHash,
                 addedLines: batch.lineCount, addedMalformed: malformedSinceCommit,
                 status: "ok", lastError: nil)
@@ -213,9 +234,9 @@ public struct FileSynchronizer: Sendable {
             linesSinceCommit = 0
         }
 
-        // A stale `rebuilt` file keeps its counters from the previous read; reset them so that the
-        // line count reflects the file as it is now.
-        if rebuilt {
+        // A file that is read again from its start keeps its counters from the previous read; reset them so that
+        // the line count reflects the file as it is now.
+        if rebuilt || (readsWholeFile && existing != nil) {
             try db.write { c in try c.run("UPDATE source_file SET line_count = 0, malformed_lines = 0 WHERE id = ?", [.int(fileID)]) }
         }
 
@@ -228,10 +249,14 @@ public struct FileSynchronizer: Sendable {
                 buf = grown
                 capacity = newCapacity
             }
-            let n = read(fd, buf + fill, Self.chunkBytes)
-            if n < 0 {
-                if errno == EINTR { continue }
-                throw FileAccessError(path: file.path, message: String(cString: strerror(errno)), code: errno)
+            let n: Int
+            do {
+                n = try readChunk(into: buf + fill)
+            } catch let error as ZstdFileReader.DecodeError {
+                // Everything decoded before the damage is valid, so keep it and then report the file.
+                try commit(final: true)
+                setStatus(sourceID: file.sourceID, path: file.path, status: "damaged", error: error.message)
+                throw FileAccessError(path: file.path, message: error.message, code: EILSEQ)
             }
             if n == 0 { break }
             fill += n

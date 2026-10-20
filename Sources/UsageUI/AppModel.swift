@@ -7,7 +7,7 @@ import UserNotifications
 import UsageCore
 
 public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
-    case overview, trends, sessions, projects, models, quota, diagnostics
+    case overview, trends, sessions, projects, models, cost, quota, providers, diagnostics
     public var id: String { rawValue }
     var title: String {
         switch self {
@@ -16,7 +16,9 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .sessions: "Sessions"
         case .projects: "Projects"
         case .models: "Models"
+        case .cost: "Cost"
         case .quota: "Quota"
+        case .providers: "Providers"
         case .diagnostics: "Diagnostics"
         }
     }
@@ -27,10 +29,27 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .sessions: "list.bullet.rectangle"
         case .projects: "folder"
         case .models: "cpu"
+        case .cost: "dollarsign.circle"
         case .quota: "hourglass"
+        case .providers: "square.stack.3d.up"
         case .diagnostics: "stethoscope"
         }
     }
+    /// Pages whose figures follow the dashboard scope.
+    var followsScope: Bool {
+        switch self {
+        case .overview, .trends, .sessions, .projects, .models, .cost, .quota: true
+        case .providers, .diagnostics: false
+        }
+    }
+}
+
+/// What one provider used today and this week.
+public struct ProviderPeriodUsage: Identifiable, Equatable, Sendable {
+    public var provider: ProviderID
+    public var today: ProviderUsageRow
+    public var week: ProviderUsageRow
+    public var id: String { provider.rawValue }
 }
 
 /// This is the text shown next to the icon in the menu bar.
@@ -52,16 +71,27 @@ public final class AppModel {
     public let settingsStore: SettingsStore
     public let analytics: AnalyticsEngine
     public let collector: UsageCollector
-    public let registry: SessionRegistryMonitor
+    /// Watches the process registry of the one product that keeps one, so that its sessions are known to be live.
+    public let liveness: SessionRegistryMonitor
     public let quota: QuotaCoordinator
     @ObservationIgnored private let alerts: AlertEngine
 
     // MARK: Published state
 
     public private(set) var settings: AppSettings
+    /// Summaries over all providers, for the menu bar and its popover.
     public private(set) var overview = OverviewSnapshot()
+    /// Summaries for the dashboard. They equal `overview` unless the scope narrows them.
+    public private(set) var scopedOverview = OverviewSnapshot()
+    public private(set) var quotaPools: [QuotaPoolState] = []
     public private(set) var quotaStates: [QuotaWindowState] = []
-    public private(set) var quotaSource = QuotaSourceStatus()
+    public private(set) var quotaFeeds: [QuotaFeedStatus] = []
+    public private(set) var activeByProvider: [ProviderID: Int] = [:]
+    /// Whether Claude Code's settings point at the status line helper that supplies its quota.
+    public private(set) var claudeHelperInstalled = false
+    public private(set) var filterOptions = AnalyticsEngine.FilterOptions()
+    /// Usage of each provider today and this week, for the menu bar popover.
+    public private(set) var providerUsage: [ProviderPeriodUsage] = []
     public private(set) var recentSessions: [SessionRow] = []
     public private(set) var latestActivity: Date?
     public private(set) var live: [String: LiveProcess] = [:]
@@ -77,6 +107,12 @@ public final class AppModel {
     // MARK: Navigation
 
     public var selection: DashboardSection = .overview
+    /// Which providers, products, accounts and surfaces the dashboard pages show.
+    public var scope = DashboardScope() {
+        didSet { if scope != oldValue { scope = scope.normalized(registry: db.registry, options: filterOptions); scopeVersion &+= 1; requestRefresh() } }
+    }
+    /// Increases whenever the scope changes, so that open pages reload.
+    public private(set) var scopeVersion = 0
     public var openSessionID: Int64?
     public var sessionsProjectFilter: Int64?
 
@@ -94,19 +130,20 @@ public final class AppModel {
         return AppModel(db: db)
     }
 
-    public init(db: UsageDatabase, adapters: [any SourceAdapter]? = nil, bridgeDirectory: URL = QuotaPaths.bridgeDirectory,
-                registryDirectory: URL? = nil, desktopCache: URL = QuotaPaths.desktopPlanUsageCache) {
+    public init(db: UsageDatabase, adapters: [any SourceAdapter]? = nil, quotaFeeds: [any QuotaFeed]? = nil,
+                bridgeDirectory: URL = QuotaPaths.bridgeDirectory, registryDirectory: URL? = nil,
+                desktopCache: URL = QuotaPaths.desktopPlanUsageCache) {
         self.db = db
         let store = SettingsStore(db: db)
         settingsStore = store
         settings = store.value
         openReport = db.openReport
         analytics = AnalyticsEngine(db: db)
-        let resolvedAdapters = adapters ?? [ClaudeCodeAdapter()]
+        let resolvedAdapters = adapters ?? [ClaudeCodeAdapter(), CodexAdapter()]
         collector = UsageCollector(db: db, adapters: resolvedAdapters, retentionFloorMs: { store.value.retentionFloorMs },
-                                   isSourceEnabled: { !store.value.disabledSources.contains($0) })
-        registry = registryDirectory.map { SessionRegistryMonitor(directory: $0, db: db) } ?? SessionRegistryMonitor(db: db)
-        quota = QuotaCoordinator(db: db, settings: store, bridgeDirectory: bridgeDirectory, desktopCacheURL: desktopCache)
+                                   isSourceEnabled: { !store.value.disabledSources.contains($0.rawValue) })
+        liveness = registryDirectory.map { SessionRegistryMonitor(directory: $0, db: db) } ?? SessionRegistryMonitor(db: db)
+        quota = QuotaCoordinator(db: db, settings: store, feeds: quotaFeeds ?? .claude(bridgeDirectory: bridgeDirectory, desktopCache: desktopCache))
         alerts = AlertEngine(db: db)
     }
 
@@ -117,21 +154,28 @@ public final class AppModel {
         guard !started else { return }
         started = true
         await collector.start()
-        await registry.start()
+        await liveness.start()
         await quota.start()
         if db.openReport.recoveredFromCorruption { await collector.rebuildFromSource() }
 
         let collectorEvents = await collector.events()
+        let collectorEvents2 = await collector.events()
         tasks.append(Task { [weak self] in
             for await _ in collectorEvents { self?.requestRefresh() }
         })
-        let registryChanges = await registry.changes()
+        let registryChanges = await liveness.changes()
         tasks.append(Task { [weak self] in
             for await _ in registryChanges { self?.requestRefresh() }
         })
         let quotaChanges = await quota.changes()
         tasks.append(Task { [weak self] in
             for await _ in quotaChanges { self?.requestRefresh() }
+        })
+        // Snapshots that arrive with the usage records change the quota state too.
+        tasks.append(Task { [weak self] in
+            for await event in collectorEvents2 {
+                if case .dataChanged = event { await self?.quota.dataDidChange() }
+            }
         })
 
         installTerminationHandlers()
@@ -205,7 +249,7 @@ public final class AppModel {
         for o in observers { NSWorkspace.shared.notificationCenter.removeObserver(o); NotificationCenter.default.removeObserver(o) }
         observers.removeAll()
         await collector.stop()
-        await registry.stop()
+        await liveness.stop()
         await quota.stop()
         db.markCleanShutdown()
     }
@@ -213,7 +257,7 @@ public final class AppModel {
     private func systemDidWake() async {
         await collector.systemDidWake()
         await quota.refresh(force: true)
-        await registry.rescan()
+        await liveness.rescan()
         requestRefresh()
     }
 
@@ -260,7 +304,7 @@ public final class AppModel {
         Task {
             await collector.reconcileNow(reason: "manual")
             await quota.refresh(force: true)
-            await registry.rescan()
+            await liveness.rescan()
             heavyStale = true
             requestRefresh()
         }
@@ -288,15 +332,18 @@ public final class AppModel {
     private func reloadLight() async {
         let engine = analytics
         let policy = settings.statusPolicy
-        let liveNow = await registry.liveSessions()
+        let liveNow = await liveness.liveSessions()
+        let liveProvider = db.registry.providerOf(product: liveness.product)
         let now = Date()
         let result = try? await Task.detached(priority: .utility) {
-            (try engine.activeSessionCount(now: now, live: liveNow, policy: policy), try engine.latestActivity())
+            (try engine.activeSessionCounts(now: now, live: liveNow, liveProvider: liveProvider, policy: policy), try engine.latestActivity())
         }.value
         live = liveNow
-        overview.activeSessions = result?.0 ?? 0
+        activeByProvider = result?.0 ?? [:]
+        overview.activeSessions = activeByProvider.values.reduce(0, +)
         latestActivity = result?.1
-        quotaStates = await quota.states()
+        quotaPools = await quota.pools()
+        quotaStates = quotaPools.flatMap(\.windows)
         collectorSnapshot = await collector.snapshot()
     }
 
@@ -305,22 +352,40 @@ public final class AppModel {
         let policy = settings.statusPolicy
         let liveNow = live
         let now = Date()
+        let scopeFilter = scope.usageFilter
         do {
-            let result = try await Task.detached(priority: .userInitiated) { () -> (OverviewSnapshot, [SessionRow]) in
+            let result = try await Task.detached(priority: .userInitiated) { () -> (OverviewSnapshot, OverviewSnapshot, [SessionRow], AnalyticsEngine.FilterOptions, [ProviderPeriodUsage]) in
                 let overview = try engine.overview(now: now, live: liveNow, policy: policy)
+                let calendar = Calendar.current
+                let dayStart = calendar.startOfDay(for: now)
+                let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start ?? dayStart
+                let today = Dictionary(uniqueKeysWithValues: try engine.providers(UsageFilter(from: dayStart)).map { ($0.provider, $0) })
+                let week = try engine.providers(UsageFilter(from: weekStart))
+                let usage = week.map { row in
+                    ProviderPeriodUsage(provider: row.provider,
+                                        today: today[row.provider] ?? ProviderUsageRow(provider: row.provider, product: nil, tokens: .zero, requests: 0, sessions: 0, cost: .zero, coverage: UsageCoverage(), lastActivity: nil),
+                                        week: row)
+                }
+                let scoped = scopeFilter == UsageFilter() ? overview : try engine.overview(now: now, live: liveNow, policy: policy, scope: scopeFilter)
                 var filter = UsageFilter()
                 filter.from = now.addingTimeInterval(-30 * 86_400)
                 let rows = try engine.sessionRows(filter, now: now, live: liveNow, policy: policy)
                 let recent = rows.sorted { ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast) }
-                return (overview, Array(recent.prefix(40)))
+                return (overview, scoped, Array(recent.prefix(40)), try engine.filterOptions(), usage)
             }.value
             overview = result.0
-            recentSessions = result.1
+            overview.activeSessions = activeByProvider.values.reduce(0, +)
+            scopedOverview = result.1
+            scopedOverview.activeSessions = scope.isActive ? result.1.activeSessions : overview.activeSessions
+            recentSessions = result.2
+            filterOptions = result.3
+            providerUsage = result.4
             lastError = nil
         } catch {
             lastError = "\(error)"
         }
-        quotaSource = await quota.sourceStatus()
+        quotaFeeds = await quota.feedStatus()
+        claudeHelperInstalled = StatusLineInstaller.inspect().isInstalled
     }
 
     /// Called when a window becomes visible, so that it never shows numbers that were skipped while hidden.
@@ -331,9 +396,9 @@ public final class AppModel {
     // MARK: Alerts
 
     private func evaluateAlerts() {
-        let recentActivity = latestActivity.map { Date().timeIntervalSince($0) < 600 } ?? false
+        let active = (try? analytics.activeProviders(since: Date().addingTimeInterval(-600))) ?? []
         let notes = alerts.evaluate(states: quotaStates, sources: collectorSnapshot.sources,
-                                    recentLocalActivity: recentActivity, settings: settings.notifications)
+                                    activeProviders: active, settings: settings.notifications)
         guard !notes.isEmpty else { return }
         NotificationDelivery.deliver(notes)
     }
@@ -345,7 +410,7 @@ public final class AppModel {
         settingsStore.update(change)
         settings = settingsStore.value
         if before.notifications.enabled == false, settings.notifications.enabled { NotificationDelivery.requestAuthorization() }
-        if before.showDesktopPlanUsageHint != settings.showDesktopPlanUsageHint || before.quotaRefreshSeconds != settings.quotaRefreshSeconds {
+        if before.showUnverifiedQuota != settings.showUnverifiedQuota || before.quotaRefreshSeconds != settings.quotaRefreshSeconds {
             Task { await quota.refresh(force: true) }
         }
         if before.retentionDays != settings.retentionDays { Task { await applyRetention() } }
@@ -374,34 +439,97 @@ public final class AppModel {
 
     // MARK: Derived values
 
-    public func quotaState(_ kind: QuotaWindowKind) -> QuotaWindowState? { quotaStates.first { $0.kind == kind } }
+    public var providers: [ProviderDefinition] { db.registry.providers }
+
+    /// Applies the dashboard scope to a filter that a page built from its own controls.
+    public func scoped(_ filter: UsageFilter) -> UsageFilter {
+        var f = filter
+        scope.apply(to: &f)
+        return f
+    }
+
+    /// The pools that belong to the current scope: the provider and account must match, and when products are chosen
+    /// the pool must serve at least one of them.
+    public var scopedPools: [QuotaPoolState] {
+        quotaPools.filter { state in
+            (scope.providers.isEmpty || scope.providers.contains(state.pool.key.provider))
+                && (scope.accounts.isEmpty || scope.accounts.contains(state.pool.key.accountID))
+                && (scope.products.isEmpty || !scope.products.isDisjoint(with: state.pool.products))
+        }
+    }
 
     public var activeSessionCount: Int { overview.activeSessions }
 
-    /// What the menu bar shows. Percentages are always real quota values; when a window has no
-    /// authoritative value, a dash is shown instead of a number.
-    public var menuBarTitle: MenuBarTitle {
-        func part(_ kind: QuotaWindowKind) -> String {
-            guard let s = quotaState(kind), s.isDisplayable, let pct = s.utilizationPercent else { return "–" }
-            return "\(Int(pct.rounded()))%" + (s.freshness == .stale ? "*" : "")
-        }
-        let five = part(.fiveHour), week = part(.sevenDay)
-        var tip = "Claude usage"
-        for kind in [QuotaWindowKind.fiveHour, .sevenDay] {
-            if let s = quotaState(kind), let r = s.reading, s.isDisplayable {
-                tip += "\n\(kind.displayName): \(Int((s.utilizationPercent ?? 0).rounded()))% used, updated \(Fmt.relative(r.observedAt))"
-                    + (s.freshness == .stale ? " (stale)" : "")
-            } else {
-                tip += "\n\(kind.displayName): unavailable"
+    /// The pool whose figures stand for a provider in the menu bar: among the provider's pools that have a
+    /// displayable window, the one that reported most recently.
+    func primaryPool(of provider: ProviderID) -> QuotaPoolState? {
+        quotaPools.filter { $0.pool.key.provider == provider && $0.windows.contains { $0.isDisplayable } }
+            .max { ($0.windows.compactMap { $0.reading?.observedAt }.max() ?? .distantPast) < ($1.windows.compactMap { $0.reading?.observedAt }.max() ?? .distantPast) }
+    }
+
+    private static func percentText(_ w: QuotaWindowState) -> String {
+        "\(Int((w.utilizationPercent ?? 0).rounded()))%" + (w.freshness == .stale ? "*" : "")
+    }
+
+    /// The figures of a pool for the menu bar: its shortest and its longest displayable window.
+    private func figures(of pool: QuotaPoolState, onlyShortest: Bool = false) -> String? {
+        let shown = pool.windows.filter(\.isDisplayable)
+        guard let first = shown.first else { return nil }
+        if onlyShortest || shown.count == 1 { return Self.percentText(first) }
+        return Self.percentText(first) + " · " + Self.percentText(shown[shown.count - 1])
+    }
+
+    /// One line per displayable window, grouped by provider, for the menu bar tooltip.
+    private var quotaTooltip: String {
+        var lines = ["AI usage"]
+        for provider in providers {
+            let pools = quotaPools.filter { $0.pool.key.provider == provider.id }
+            guard !pools.isEmpty else { continue }
+            lines.append(provider.shortName)
+            for pool in pools {
+                let account = pool.pool.accountLabel == "Unassigned" ? "" : " (\(pool.pool.accountLabel))"
+                let shown = pool.windows.filter { $0.reading != nil }
+                if shown.isEmpty { lines.append("  \(pool.pool.name)\(account): no data yet"); continue }
+                for w in shown {
+                    if w.isDisplayable, let r = w.reading {
+                        lines.append("  \(pool.pool.name)\(account), \(w.displayName.lowercased()): \(Int((w.utilizationPercent ?? 0).rounded()))% used, updated \(Fmt.relative(r.observedAt))" + (w.freshness == .stale ? " (stale)" : ""))
+                    } else {
+                        lines.append("  \(pool.pool.name)\(account), \(w.displayName.lowercased()): unavailable")
+                    }
+                }
             }
         }
+        if lines.count == 1 { lines.append("No quota figures reported yet") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// What the menu bar shows. Percentages are always real quota values reported by a provider; when no value is
+    /// available, nothing is shown in place of a number. The figures of different pools are compared or listed side by
+    /// side, and never added.
+    public var menuBarTitle: MenuBarTitle {
+        let tip = quotaTooltip
         switch settings.menuBarMode {
-        case .iconOnly: return MenuBarTitle(text: "", tooltip: tip)
-        case .fiveHour: return MenuBarTitle(text: five == "–" ? "" : five, tooltip: tip)
-        case .weekly: return MenuBarTitle(text: week == "–" ? "" : week, tooltip: tip)
-        case .both: return MenuBarTitle(text: five == "–" && week == "–" ? "" : "\(five) · \(week)", tooltip: tip)
+        case .iconOnly:
+            return MenuBarTitle(text: "", tooltip: tip)
+        case .quota(let provider):
+            let text = primaryPool(of: provider).flatMap { figures(of: $0) } ?? ""
+            return MenuBarTitle(text: text, tooltip: tip)
+        case .allProviders:
+            let parts: [String] = providers.compactMap { provider in
+                guard let pool = primaryPool(of: provider.id), let text = figures(of: pool, onlyShortest: true) else { return nil }
+                return "\(provider.shortName.prefix(1).uppercased()) \(text)"
+            }
+            return MenuBarTitle(text: parts.joined(separator: " · "), tooltip: tip)
+        case .highestUtilization:
+            let shown = quotaStates.filter(\.isDisplayable)
+            guard let top = shown.max(by: { ($0.utilizationPercent ?? 0) < ($1.utilizationPercent ?? 0) }) else { return MenuBarTitle(text: "", tooltip: tip) }
+            let name = providers.first { $0.id == top.pool.key.provider }?.shortName ?? top.pool.key.provider.rawValue
+            return MenuBarTitle(text: Self.percentText(top),
+                                tooltip: tip + "\nHighest: \(name), \(top.pool.name), \(top.displayName.lowercased())")
         case .activeSessions:
-            return MenuBarTitle(text: activeSessionCount > 0 ? "\(activeSessionCount)" : "", tooltip: tip + "\nActive sessions: \(activeSessionCount)")
+            let lines = providers.compactMap { p in activeByProvider[p.id].map { "  \(p.shortName): \($0)" } }
+            return MenuBarTitle(text: activeSessionCount > 0 ? "\(activeSessionCount)" : "",
+                                tooltip: tip + "\nActive sessions: \(activeSessionCount)" + (lines.isEmpty ? "" : "\n" + lines.joined(separator: "\n")))
         }
     }
 

@@ -17,30 +17,34 @@ final class PersistenceTests: XCTestCase {
     func testForeignKeysAreEnforced() throws {
         let env = try TestEnv()
         XCTAssertThrowsError(try env.db.write { c in
-            try c.run("INSERT INTO usage_source(id, display_name) VALUES('s','s')")
+            try c.run("INSERT INTO project(key, name) VALUES('scratch','scratch')")
             try c.run("""
-                INSERT INTO model_request(source_id, request_key, session_id, model_id, requested_at, input_tokens,
-                    output_tokens, cache_read_tokens, cache_creation_tokens, first_ingested_at)
-                VALUES('s', 'k', 9999, 'nope', 1, 1, 1, 1, 1, 1)
+                INSERT INTO model_request(product_id, request_key, session_id, model_id, requested_at, uncached_input_tokens,
+                    output_tokens, cache_read_tokens, cache_creation_tokens, normalization, telemetry_source_id, first_ingested_at)
+                VALUES('claude-code', 'k', 9999, 9999, 1, 1, 1, 1, 1, 'test', 'claude-code-transcripts', 1)
                 """)
         })
-        // The failed statement rolled back the whole transaction, including the source row.
-        XCTAssertEqual(try env.db.read { try $0.scalarInt("SELECT count(*) FROM usage_source") }, 0)
+        // The failed statement rolled back the whole transaction, including the project row.
+        XCTAssertEqual(try env.db.read { try $0.scalarInt("SELECT count(*) FROM project WHERE key = 'scratch'") }, 0)
     }
 
     func testRequestIdentityIsUnique() throws {
         let env = try TestEnv()
         try env.db.write { c in
-            try c.run("INSERT INTO usage_source(id, display_name) VALUES('s','s')")
-            try c.run("INSERT INTO session(source_id, external_id) VALUES('s','x')")
-            try c.run("INSERT INTO model(id, canonical, family, display_name) VALUES('m','m','other','m')")
         }
         func insert() throws {
             try env.db.write { c in
                 try c.run("""
-                    INSERT INTO model_request(source_id, request_key, session_id, model_id, requested_at, input_tokens,
-                        output_tokens, cache_read_tokens, cache_creation_tokens, first_ingested_at)
-                    VALUES('s', 'dup', 1, 'm', 1, 1, 1, 1, 1, 1)
+                    INSERT OR IGNORE INTO session(id, product_id, external_id, account_id, telemetry_source_id)
+                    VALUES(1, 'claude-code', 'S', (SELECT id FROM account WHERE provider_id = 'anthropic' AND hash = ''), 'claude-code-transcripts')
+                    """)
+                try c.run("""
+                    INSERT OR IGNORE INTO model(id, provider_id, raw_id, canonical, family, display_name) VALUES(1, 'anthropic', 'm', 'm', 'other', 'm')
+                    """)
+                try c.run("""
+                    INSERT INTO model_request(product_id, request_key, session_id, model_id, requested_at, uncached_input_tokens,
+                        output_tokens, cache_read_tokens, cache_creation_tokens, normalization, telemetry_source_id, first_ingested_at)
+                    VALUES('claude-code', 'dup', 1, 1, 1, 1, 1, 1, 1, 'test', 'claude-code-transcripts', 1)
                     """)
             }
         }
@@ -58,11 +62,8 @@ final class PersistenceTests: XCTestCase {
     func testTransactionRollsBackEverythingOnFailure() throws {
         let env = try TestEnv()
         var batch = NormalizedBatch()
-        let session = SessionObservation(sourceID: "claude-code", externalID: "S", projectKey: "-p", cwd: nil, application: nil,
-                                         clientVersion: nil, firstSeenMs: t0, lastSeenMs: t0, versionSeenMs: 0)
-        batch.add(session)
-        batch.add(RequestObservation(sourceID: "claude-code", requestKey: "m1", sessionExternalID: "S", modelID: "claude-opus-5-5",
-                                     requestedAtMs: t0, uncachedInput: 1, output: 1, cacheRead: 0, cacheCreation: 0))
+        batch.add(Obs.session())
+        batch.add(Obs.claudeRequest("m1"))
         // The checkpoint references a file row that does not exist, which is allowed (UPDATE affects zero rows)...
         _ = try IngestWriter.apply(batch: batch, checkpoint: nil, retentionFloorMs: nil, db: env.db)
         // ...so force a failure inside the transaction instead.
@@ -113,12 +114,9 @@ final class PersistenceTests: XCTestCase {
         // The writer commits many small batches.
         for batchIndex in 0..<60 {
             var batch = NormalizedBatch()
-            batch.add(SessionObservation(sourceID: "claude-code", externalID: "S", projectKey: "-p", cwd: nil, application: nil,
-                                         clientVersion: nil, firstSeenMs: t0, lastSeenMs: t0, versionSeenMs: 0))
+            batch.add(Obs.session())
             for i in 0..<40 {
-                batch.add(RequestObservation(sourceID: "claude-code", requestKey: "m\(batchIndex)-\(i)", sessionExternalID: "S",
-                                             modelID: "claude-opus-5-5", requestedAtMs: t0 + Int64(i), uncachedInput: 1, output: 1,
-                                             cacheRead: 0, cacheCreation: 0))
+                batch.add(Obs.claudeRequest("m\(batchIndex)-\(i)", at: t0 + Int64(i)))
             }
             _ = try IngestWriter.apply(batch: batch, checkpoint: nil, retentionFloorMs: nil, db: db)
         }
@@ -167,15 +165,15 @@ final class PersistenceTests: XCTestCase {
         store.update {
             $0.quotaRefreshSeconds = 1          // below the safe minimum
             $0.retentionDays = -5
-            $0.notifications.fiveHourThresholds = [90, 50, 50, 150]
-            $0.menuBarMode = .fiveHour
+            $0.notifications.shortWindowThresholds = [90, 50, 50, 150]
+            $0.menuBarMode = .quota(.anthropic)
         }
         XCTAssertEqual(store.value.quotaRefreshSeconds, 30)
         XCTAssertEqual(store.value.retentionDays, 0)
-        XCTAssertEqual(store.value.notifications.fiveHourThresholds, [50, 90, 100])
+        XCTAssertEqual(store.value.notifications.shortWindowThresholds, [50, 90, 100])
         try env.reopen()
         let reloaded = SettingsStore(db: env.db)
-        XCTAssertEqual(reloaded.value.menuBarMode, .fiveHour)
+        XCTAssertEqual(reloaded.value.menuBarMode, .quota(.anthropic))
         XCTAssertEqual(reloaded.value.quotaRefreshSeconds, 30)
     }
 
@@ -206,19 +204,18 @@ final class PersistenceTests: XCTestCase {
         var rng = SystemRandomNumberGenerator()
         for round in 0..<25 {
             let env = try TestEnv()
-            let observations = (0..<6).map { i in
-                RequestObservation(sourceID: "claude-code", requestKey: "m", apiRequestID: [nil, "req_a", "req_b"].randomElement(using: &rng)!,
-                                   sessionExternalID: "S", agentExternalID: [nil, "A", "B"].randomElement(using: &rng)!,
-                                   modelID: "claude-opus-5-5", requestedAtMs: t0 + Int64.random(in: 0...50_000, using: &rng),
-                                   uncachedInput: Int64.random(in: 0...5, using: &rng), output: Int64.random(in: 0...1000, using: &rng),
-                                   cacheRead: Int64.random(in: 0...90_000, using: &rng), cacheCreation: Int64.random(in: 0...500, using: &rng),
-                                   cacheCreation5m: [nil, 0, 100].randomElement(using: &rng)!, cacheCreation1h: [nil, 0, 50].randomElement(using: &rng)!,
-                                   speed: [nil, "standard"].randomElement(using: &rng)!, stopReason: [nil, "end_turn"].randomElement(using: &rng)!)
-                    .self
+            let observations = (0..<6).map { _ in
+                Obs.claudeRequest("m", at: t0 + Int64.random(in: 0...50_000, using: &rng),
+                                  input: Int64.random(in: 0...5, using: &rng), output: Int64.random(in: 0...1000, using: &rng),
+                                  cacheRead: [nil, Int64.random(in: 0...90_000, using: &rng)].randomElement(using: &rng)!,
+                                  cacheCreation: Int64.random(in: 0...500, using: &rng),
+                                  cacheCreation5m: [nil, 0, 100].randomElement(using: &rng)!, cacheCreation1h: [nil, 0, 50].randomElement(using: &rng)!,
+                                  apiRequestID: [nil, "req_a", "req_b"].randomElement(using: &rng)!,
+                                  agent: [nil, "A", "B"].randomElement(using: &rng)!,
+                                  speed: [nil, "standard"].randomElement(using: &rng)!, stop: [nil, "end_turn"].randomElement(using: &rng)!)
             }
             let expected = observations.dropFirst().reduce(observations[0]) { $0.merged(with: $1) }
-            let session = SessionObservation(sourceID: "claude-code", externalID: "S", projectKey: "-p", cwd: nil, application: nil,
-                                             clientVersion: nil, firstSeenMs: t0, lastSeenMs: t0, versionSeenMs: 0)
+            let session = Obs.session()
             // Deliver each observation in its own batch, in random order, some twice.
             for o in (observations + observations.prefix(3)).shuffled() {
                 var batch = NormalizedBatch()
@@ -228,16 +225,16 @@ final class PersistenceTests: XCTestCase {
             }
             let stored = try env.db.read { c in
                 try c.queryOne("""
-                    SELECT input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_5m_tokens,
+                    SELECT uncached_input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_5m_tokens,
                            cache_creation_1h_tokens, requested_at, agent_key, api_request_id, speed, stop_reason FROM model_request
-                    """) { r in (r.int(0), r.int(1), r.int(2), r.int(3), r.intOrNil(4), r.intOrNil(5), r.int(6), r.textOrNil(7), r.textOrNil(8), r.textOrNil(9), r.textOrNil(10)) }
+                    """) { r in (r.intOrNil(0), r.int(1), r.intOrNil(2), r.intOrNil(3), r.intOrNil(4), r.intOrNil(5), r.int(6), r.textOrNil(7), r.textOrNil(8), r.textOrNil(9), r.textOrNil(10)) }
             }!
-            XCTAssertEqual(stored.0, expected.uncachedInput, "round \(round)")
-            XCTAssertEqual(stored.1, expected.output)
-            XCTAssertEqual(stored.2, expected.cacheRead)
-            XCTAssertEqual(stored.3, expected.cacheCreation)
-            XCTAssertEqual(stored.4, expected.cacheCreation5m)
-            XCTAssertEqual(stored.5, expected.cacheCreation1h)
+            XCTAssertEqual(stored.0, expected.usage.uncachedInput, "round \(round)")
+            XCTAssertEqual(stored.1, expected.usage.output)
+            XCTAssertEqual(stored.2, expected.usage.cacheRead, "an unknown category stays unknown unless another observation knows it")
+            XCTAssertEqual(stored.3, expected.usage.cacheCreation)
+            XCTAssertEqual(stored.4, expected.usage.cacheCreation5m)
+            XCTAssertEqual(stored.5, expected.usage.cacheCreation1h)
             XCTAssertEqual(stored.6, expected.requestedAtMs)
             XCTAssertEqual(stored.7, expected.agentExternalID)
             XCTAssertEqual(stored.8, expected.apiRequestID)

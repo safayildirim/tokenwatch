@@ -1,8 +1,8 @@
 # Validation and test results
 
-## 1. Automated tests: 174 tests, 26 suites, 0 failures
+## 1. Automated tests: 254 tests, 0 failures
 
-`swift test` (about 70 seconds). Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
+`swift test` (about 100 seconds). Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
 
 | Area | Suite (tests) | What it proves |
 |---|---|---|
@@ -17,7 +17,32 @@
 | UI state and flows | `AppModelTests` (14), `FormatterTests` (5), `RangeAndFilterTests` (4) | Empty database and missing Claude folder states. History import and live sessions appear. Menu bar text in every display mode, dashes for unknown windows, a stale marker, no percentage from tokens. Navigation. Refresh coalescing. Settings persistence and retention. Disabling a source. **A hidden app skips heavy queries but keeps the menu bar accurate; showing a window brings summaries up to date** |
 | UI rendering | `RenderTests` (6) | The real views are drawn offscreen and the pixels inspected. All six quota states render and **look different from each other**. Every dashboard page renders with real data, the session page and the menu bar popover in light and dark, empty states and settings render |
 
+### Added by the multi-provider refactor (80 tests)
+
+| Area | Suite | What it proves |
+|---|---|---|
+| Codex classification and discovery | `CodexClassificationTests`, `CodexDiscoveryTests` | Every `originator` maps to the right product and surface, matched word by word. Active, archived and compressed files are found, `auth.json` and other files never are. File events are routed by location. `$CODEX_HOME` is honoured. A missing folder is "not found". |
+| Codex accounting | `CodexAccountingTests`, `CodexSessionTests` | OpenAI's input includes cached tokens and reasoning is part of output. A repeated snapshot is not a response, and two equal responses are two. Usage records are keyed by response id and the same response in two copies counts once. A response without an event is reconstructed from the totals and flagged. A grand-total-only event is reconstructed without double counting. Compactions are counted. The model in effect is used. Unknown models are unpriced. Product, surface and account come from the header, an unidentified account is not guessed, and the **raw account id, user id, instructions and message text never reach the database**. Sub-agent and review threads are linked to parent and root, including when the parent arrives later. **A fork does not recount its parent's history, and its copied quota snapshots are ignored.** |
+| Codex ingestion | `CodexIngestTests`, `ZstdReaderTests` (5) | Compressed and plain files give the same result, a compressed file is read once, a damaged one keeps what was decoded and is not retried until it changes. A growing file is read again from the top without double counting. An unfinished last line is picked up later. Unknown record types, extra fields, null `info` and damaged lines are tolerated. The retention floor applies. Claude and Codex coexist and filter apart. The decoder is checked against the reference `zstd` tool (including a multi-frame file, small buffers, a truncated and a corrupt file). |
+| OpenAI quota | `OpenAIQuotaTests` | Pools per account with windows identified by length. A weekly-only plan gets no invented 5-hour window. Codex and Work share one pool, two accounts and the unassigned account are three pools and are never summed. ChatGPT Chat is unobservable and never shows a figure. Out-of-order delivery cannot replace a newer snapshot. Cycles tolerate reset jitter and a new cycle is recognized. Freshness ages, a reset window is unknown rather than zero. Another `limit_id` is another pool. Claude and OpenAI pools stay separate in one database. |
+| Alerts | `AlertEngineTests` (+5) | Two accounts alert independently, different pools do not share identity, a shared pool alerts once however many products use it, a new cycle alerts again, a stale feed only alerts for a provider in use. |
+| Verification | `CodexVerifierTests` | The independent recount agrees on a mixed history (usage records, events, a fork, a missing event), detects altered and deleted data, and compares Codex's own figures as evidence only. |
+| Analytics | `OpenAIAnalyticsTests` | Filters by product, surface, account, source and provider. Coverage says which categories were not reported. Sums over models, sessions, projects and days all equal the total, and reasoning is never added to output. Model rows keep providers apart. A session's quota-window context uses only its own account's windows. |
+| Architecture | `ArchitectureIsolationTests`, `FutureProviderTests` | **No provider name appears in the shared core** outside designated files. The schema has no provider-specific columns. The registry is consistent. **An invented provider with a different token format flows through the real collector, writer, analytics, pricing, export, quota and alert code.** |
+| Concurrency | `ConcurrentProvidersTests` | Both providers are collected live while files grow, restarts and a reopened database change nothing, there are no duplicate requests, and a corrupt Codex file does not degrade Claude's health (this test found and fixed a bug where one source's failing file marked every source degraded). |
+| UI | `AppModelTests` (+7), `ViewLogicTests` | Menu bar modes per provider, side by side, highest utilization (a comparison, not a sum), the choice survives a restart, stale marks. Active sessions per provider. The dashboard scope narrows dashboard figures but not the menu bar and drops incompatible choices. |
+
 ## 2. Validation against the real installation
+
+The Claude figures below were measured on the previous, Claude-only build and **re-run on the multi-provider build**: `ccu verify --provider claude` is consistent (793 files, 86,614 requests, 170 sessions; uncached input 177,106, output 59,815,391, cache read 27,231,882,256, cache creation 386,054,348, all equal to the independent recount).
+
+### OpenAI (Codex) on the real data
+
+`ccu verify --provider openai`: 232 sessions, input 494,170,138, cached 473,721,088, output 1,846,647, reasoning 707,205, **all equal to the independent recount**, and 225 of Codex's own 232 thread totals agree exactly. Every difference from Codex's own figure is explained (usage records without events, and one fork). See [OPENAI-CODEX](OPENAI-CODEX.md).
+
+### Original Claude validation
+
+All performed on the real Claude history of the machine (793 files, 4.75 GB).
 
 All performed on the real Claude history of the machine (793 files, 4.75 GB).
 
@@ -82,7 +107,7 @@ Every page, the popover, session details and settings were rendered by the real 
 | 12 | Dashboard supports session, model and project analysis | Met |
 | 13 | History survives restarts | Met |
 | 14 | Imports and live updates do not noticeably impact macOS | Met. 5.9 s and 28 MB for 4.75 GB; about 0.05 to 0.25 % CPU idle |
-| 15 | Tests cover critical accounting and lifecycle | Met. 174 tests |
+| 15 | Tests cover critical accounting and lifecycle | Met. 254 tests |
 | 16 | Long runs without leaks or duplicates | Evidence over 10 minutes (flat memory) and idempotence tests; a multi-day soak was not run |
 | 17 | Documented install and build | Met. README |
 

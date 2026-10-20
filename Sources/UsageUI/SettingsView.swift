@@ -56,9 +56,9 @@ private struct GeneralSettings: View {
             }
             Section("Menu bar") {
                 Picker("Show", selection: Binding(get: { model.settings.menuBarMode }, set: { v in model.updateSettings { $0.menuBarMode = v } })) {
-                    ForEach(MenuBarDisplayMode.allCases) { Text($0.label).tag($0) }
+                    ForEach(MenuBarDisplayMode.choices(for: model.providers)) { Text($0.label(providers: model.providers)).tag($0) }
                 }
-                Text("Percentages are real quota values reported by Claude. When none is available the menu bar shows only the icon.")
+                Text("Percentages are real quota values reported by each provider's own software. Different pools are shown side by side or compared, never added. When no value is available the menu bar shows only the icon.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Appearance") {
@@ -71,7 +71,7 @@ private struct GeneralSettings: View {
                         value: Binding(get: { model.settings.activeWithinSeconds }, set: { v in model.updateSettings { $0.activeWithinSeconds = v } }), in: 15...3600, step: 15)
                 Stepper("Idle until \(model.settings.idleWithinMinutes) minutes without activity",
                         value: Binding(get: { model.settings.idleWithinMinutes }, set: { v in model.updateSettings { $0.idleWithinMinutes = v } }), in: 1...1440, step: 5)
-                Text("These only affect sessions without a running process to observe. A session whose process is running is shown as active or idle exactly as Claude Code reports.")
+                Text("These only affect sessions without a running process to observe. A session whose process is running is shown as active or idle exactly as its tool reports (only Claude Code keeps a process registry).")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -97,9 +97,9 @@ private struct QuotaSettings: View {
                     Text("Updates normally arrive instantly through file events. This is only a safety net, limited to 30 seconds to 1 hour. The monitor never contacts any server to get quota figures, so there is nothing to rate-limit.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Card("Undocumented source") {
-                    Toggle("Show plan-usage samples cached by Claude Desktop", isOn: Binding(get: { model.settings.showDesktopPlanUsageHint }, set: { v in model.updateSettings { $0.showDesktopPlanUsageHint = v } }))
-                    Text("Claude Desktop keeps a small local file with percentages. Its format is not documented and has no reset times, so values from it are labelled unverified, never reach the menu bar, and never trigger alerts. Off by default.")
+                Card("Undocumented sources") {
+                    Toggle("Show plan-usage figures from undocumented caches", isOn: Binding(get: { model.settings.showUnverifiedQuota }, set: { v in model.updateSettings { $0.showUnverifiedQuota = v } }))
+                    Text("Claude Desktop keeps a small local file with percentages. Its format is not documented and has no reset times, so values from it are labelled unverified, never reach the menu bar, never trigger alerts and are not stored. Off by default.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.padding()
@@ -109,38 +109,38 @@ private struct QuotaSettings: View {
 
 private struct NotificationSettingsView: View {
     @Environment(AppModel.self) private var model
-    @State private var five = ""
-    @State private var week = ""
+    @State private var short = ""
+    @State private var long = ""
 
     var body: some View {
         let n = model.settings.notifications
         Form {
             Section {
                 Toggle("Enable notifications", isOn: bind(\.enabled))
-                Text("Alerts use only quota values reported by Claude. They are never based on token counts, and each threshold is announced once per window.")
+                Text("Alerts use only quota values reported by the provider. They are never based on token counts. Each threshold is announced once per window cycle, separately for every account and pool.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Quota thresholds (percent)") {
-                TextField("Five-hour window", text: $five, onCommit: { commit(five, five: true) }).disabled(!n.enabled)
-                TextField("Weekly window", text: $week, onCommit: { commit(week, five: false) }).disabled(!n.enabled)
+                TextField("Windows of a day or less (such as 5 hours)", text: $short, onCommit: { commit(short, isShort: true) }).disabled(!n.enabled)
+                TextField("Longer windows (such as a week)", text: $long, onCommit: { commit(long, isShort: false) }).disabled(!n.enabled)
                 Text("Comma-separated, for example 50, 75, 90.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Also notify when") {
                 Toggle("A window resets after heavy use", isOn: bind(\.notifyOnReset)).disabled(!n.enabled)
-                Toggle("Quota data becomes stale while Claude Code is in use", isOn: bind(\.notifyOnStaleData)).disabled(!n.enabled)
+                Toggle("Quota data becomes stale while its provider's tools are in use", isOn: bind(\.notifyOnStaleData)).disabled(!n.enabled)
                 Toggle("Usage collection keeps failing", isOn: bind(\.notifyOnCollectionFailure)).disabled(!n.enabled)
             }
             Section {
                 Button("Send a test notification") {
                     NotificationDelivery.requestAuthorization()
-                    NotificationDelivery.deliver([AlertNotification(key: "test-\(UUID().uuidString)", kind: .threshold, title: "Claude Usage", body: "Notifications are working.")])
+                    NotificationDelivery.deliver([AlertNotification(key: "test-\(UUID().uuidString)", kind: .threshold, title: "AI Usage", body: "Notifications are working.")])
                 }.disabled(!n.enabled)
             }
         }
         .formStyle(.grouped)
         .onAppear {
-            five = n.fiveHourThresholds.map(String.init).joined(separator: ", ")
-            week = n.weeklyThresholds.map(String.init).joined(separator: ", ")
+            short = n.shortWindowThresholds.map(String.init).joined(separator: ", ")
+            long = n.longWindowThresholds.map(String.init).joined(separator: ", ")
         }
     }
 
@@ -148,9 +148,9 @@ private struct NotificationSettingsView: View {
         Binding(get: { model.settings.notifications[keyPath: key] }, set: { v in model.updateSettings { $0.notifications[keyPath: key] = v } })
     }
 
-    private func commit(_ text: String, five isFive: Bool) {
+    private func commit(_ text: String, isShort: Bool) {
         let values = text.split(whereSeparator: { ", ;".contains($0) }).compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-        model.updateSettings { if isFive { $0.notifications.fiveHourThresholds = values } else { $0.notifications.weeklyThresholds = values } }
+        model.updateSettings { if isShort { $0.notifications.shortWindowThresholds = values } else { $0.notifications.longWindowThresholds = values } }
     }
 }
 
@@ -172,7 +172,7 @@ private struct DataSettings: View {
         Form {
             Section("Sources") {
                 ForEach(model.collectorSnapshot.sources) { s in
-                    Toggle(s.displayName, isOn: sourceBinding(s.sourceID))
+                    Toggle(s.displayName, isOn: sourceBinding(s.sourceID.rawValue))
                     Text(s.coverageNote).font(.caption).foregroundStyle(.secondary)
                 }
                 Text("Sessions are discovered automatically. There is nothing to register.").font(.caption).foregroundStyle(.secondary)
@@ -181,7 +181,7 @@ private struct DataSettings: View {
                 Picker("Keep history", selection: Binding(get: { model.settings.retentionDays }, set: { v in model.updateSettings { $0.retentionDays = v } })) {
                     Text("Forever").tag(0); Text("90 days").tag(90); Text("180 days").tag(180); Text("1 year").tag(365); Text("2 years").tag(730)
                 }
-                Text("Older records are deleted from this app's database and are not imported again. Your original Claude Code files are never touched.")
+                Text("Older records are deleted from this app's database and are not imported again. Your original session files are never touched.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Privacy") {
@@ -198,7 +198,7 @@ private struct DataSettings: View {
             Button("Delete and re-import", role: .destructive) { model.eraseAllData() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your Claude Code files are not touched. The history is imported from them again, unless it is outside the retention period. Quota history cannot be recovered.")
+            Text("Your session files are not touched. The history is imported from them again, unless it is outside the retention period. Quota history that came from a status line helper cannot be recovered.")
         }
     }
 }
@@ -218,7 +218,7 @@ private struct ExportSettings: View {
                 Picker("Data", selection: $kind) { ForEach(ExportKind.allCases) { Text($0.label).tag($0) } }
                 Picker("Format", selection: $format) { Text("CSV").tag(ExportFormat.csv); Text("JSON").tag(ExportFormat.json) }.pickerStyle(.segmented)
                 LabeledContent("Period") { RangePicker(selection: $range) }
-                Text("Exports contain usage metadata only, with the definition and unit of every column. CSV files get a companion .metadata.json. Costs are exact decimal estimates, not charges.")
+                Text("Exports contain usage metadata only, with the definition and unit of every column. CSV files get a companion .metadata.json. Costs are exact decimal estimates, not charges. The dashboard's provider, product, account and surface filters apply.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -235,7 +235,7 @@ private struct ExportSettings: View {
 
     private func export() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "claude-usage-\(kind.rawValue).\(format.rawValue)"
+        panel.nameFieldStringValue = "ai-usage-\(kind.rawValue).\(format.rawValue)"
         panel.allowedContentTypes = [format == .csv ? .commaSeparatedText : .json]
         if !model.settings.exportDirectory.isEmpty { panel.directoryURL = URL(fileURLWithPath: model.settings.exportDirectory) }
         guard panel.runModal() == .OK, let url = panel.url else { return }
@@ -244,6 +244,7 @@ private struct ExportSettings: View {
         status = nil
         let db = model.db
         let interval = range.interval()
+        let scope = model.scope.usageFilter
         let k = kind, f = format
         Task.detached {
             let message: String
@@ -251,7 +252,7 @@ private struct ExportSettings: View {
             do {
                 let lower = interval.from, upper = interval.to.map { $0.addingTimeInterval(-0.001) }
                 let r: ClosedRange<Date>? = (lower != nil || upper != nil) ? (lower ?? Date(timeIntervalSince1970: 0))...(upper ?? Date()) : nil
-                let result = try ExportService(db: db).export(kind: k, format: f, range: r, to: url)
+                let result = try ExportService(db: db).export(kind: k, format: f, range: r, to: url, filter: scope)
                 message = "Exported \(Fmt.grouped(Int64(result.rows))) rows."
                 written = result.url
             } catch { message = "Export failed: \(error)" }
@@ -262,7 +263,14 @@ private struct ExportSettings: View {
 
 private struct CostSettings: View {
     @Environment(AppModel.self) private var model
-    @State private var rates: [(String, String, String, String, String, String)] = []
+    @State private var rates: [(String, String, String, String, String, String, String)] = []
+    @State private var unpriced: [(ProviderID, String)] = []
+    @State private var provider: ProviderID = .anthropic
+    @State private var modelKey = ""
+    @State private var input = ""
+    @State private var cachedInput = ""
+    @State private var output = ""
+    @State private var message: String?
 
     var body: some View {
         Form {
@@ -271,48 +279,91 @@ private struct CostSettings: View {
                 Text("These estimate what the same tokens would cost on the pay-as-you-go API at published list prices. They are not your subscription charge. Models without a price card are shown as unpriced instead of being guessed, and prices are dated so earlier estimates do not change when prices do.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("Built-in price cards (US$ per million tokens, as of \(PricingCatalog.asOf))") {
+            Section("Add a price") {
+                Picker("Provider", selection: $provider) { ForEach(model.providers, id: \.id) { Text($0.name).tag($0.id) } }
+                Picker("Model", selection: $modelKey) {
+                    Text("Type a model name below").tag("")
+                    ForEach(unpriced.filter { $0.0 == provider }, id: \.1) { Text($0.1 + " (no price yet)").tag($0.1) }
+                }
+                TextField("Model key", text: $modelKey)
+                TextField("Input, US$ per million tokens", text: $input)
+                TextField("Cached input, US$ per million", text: $cachedInput)
+                TextField("Output, US$ per million", text: $output)
+                HStack {
+                    Button("Save price") { save() }.disabled(modelKey.isEmpty || Double(input) == nil || Double(output) == nil)
+                    if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                }
+                Text("Use the published price of the model. Reasoning tokens are part of output and are priced as output. A price you add applies to all usage of that model, past and future, and replaces any built-in price with the same date.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Price cards (US$ per million tokens, built-in cards as of \(PricingCatalog.asOf))") {
                 Grid(alignment: .trailing, horizontalSpacing: 12, verticalSpacing: 3) {
-                    GridRow { Text("Model").gridColumnAlignment(.leading); Text("Input"); Text("Output"); Text("Cache read"); Text("Write 5m"); Text("Write 1h") }.font(.caption.bold())
+                    GridRow { Text("Model").gridColumnAlignment(.leading); Text("Provider").gridColumnAlignment(.leading); Text("Input"); Text("Output"); Text("Cache read"); Text("Write 5m"); Text("Write 1h") }.font(.caption.bold())
                     ForEach(Array(rates.enumerated()), id: \.offset) { _, r in
-                        GridRow { Text(r.0).gridColumnAlignment(.leading); Text(r.1); Text(r.2); Text(r.3); Text(r.4); Text(r.5) }.font(.caption.monospacedDigit())
+                        GridRow { Text(r.0).gridColumnAlignment(.leading); Text(r.1).gridColumnAlignment(.leading); Text(r.2); Text(r.3); Text(r.4); Text(r.5); Text(r.6) }.font(.caption.monospacedDigit())
                     }
                 }
             }
         }
         .formStyle(.grouped)
-        .task {
-            let db = model.db
-            rates = (try? await Task.detached {
-                try db.read { c in
-                    try c.query("""
-                        SELECT model_key, speed, prompt_min, prompt_max, input_micros_per_mtok, output_micros_per_mtok,
-                               cache_read_micros_per_mtok, cache_5m_micros_per_mtok, cache_1h_micros_per_mtok
-                        FROM price_rate ORDER BY model_key, speed, prompt_min
-                        """) { r in
-                        func usd(_ i: Int32) -> String { String(format: "%g", Double(r.int(i)) / 1_000_000) }
-                        var name = r.text(0)
-                        if r.text(1) != "standard" { name += " (\(r.text(1)))" }
-                        if r.int(2) > 0 || r.intOrNil(3) != nil { name += r.intOrNil(3) == nil ? " (> \(Fmt.tokens(r.int(2) - 1)))" : " (≤ \(Fmt.tokens(r.int(3) - 1)))" }
-                        return (name, usd(4), usd(5), usd(6), usd(7), usd(8))
-                    }
+        .task(id: model.dataVersion) { await load() }
+    }
+
+    private func save() {
+        guard let i = Double(input), let o = Double(output) else { return }
+        let cached = Double(cachedInput) ?? i
+        let rate = PriceRate(provider: provider, model: modelKey.trimmingCharacters(in: .whitespaces).lowercased(), input: i, output: o,
+                             cacheRead: cached, cache5m: i, cache1h: i, note: "Added by you.")
+        do {
+            try PricingStore.upsertUserRate(model.db, rate)
+            message = "Saved."
+            input = ""; cachedInput = ""; output = ""; modelKey = ""
+            model.requestRefresh()
+        } catch { message = "Could not save: \(error)" }
+        Task { await load() }
+    }
+
+    private func load() async {
+        let db = model.db
+        let result = try? await Task.detached {
+            try db.read { c in
+                let cards = try c.query("""
+                    SELECT model_key, provider_id, speed, prompt_min, prompt_max, input_micros_per_mtok, output_micros_per_mtok,
+                           cache_read_micros_per_mtok, cache_5m_micros_per_mtok, cache_1h_micros_per_mtok
+                    FROM price_rate ORDER BY provider_id, model_key, speed, prompt_min
+                    """) { r -> (String, String, String, String, String, String, String) in
+                    func usd(_ i: Int32) -> String { String(format: "%g", Double(r.int(i)) / 1_000_000) }
+                    var name = r.text(0)
+                    if r.text(2) != "standard" { name += " (\(r.text(2)))" }
+                    if r.int(3) > 0 || r.intOrNil(4) != nil { name += r.intOrNil(4) == nil ? " (> \(Fmt.tokens(r.int(3) - 1)))" : " (≤ \(Fmt.tokens(r.int(4) - 1)))" }
+                    return (name, r.text(1), usd(5), usd(6), usd(7), usd(8), usd(9))
                 }
-            }.value) ?? []
-        }
+                let missing = try c.query("""
+                    SELECT DISTINCT m.provider_id, m.canonical FROM model m
+                    JOIN model_request r ON r.model_id = m.id
+                    WHERE NOT EXISTS (SELECT 1 FROM price_rate p WHERE p.provider_id = m.provider_id AND p.model_key = m.canonical)
+                    ORDER BY m.provider_id, m.canonical
+                    """) { (ProviderID(rawValue: $0.text(0)), $0.text(1)) }
+                return (cards, missing)
+            }
+        }.value
+        rates = result?.0 ?? []
+        unpriced = result?.1 ?? []
     }
 }
 
 private struct AboutSettings: View {
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "sparkle").font(.system(size: 40)).foregroundStyle(Palette.series[1])
-            Text("Claude Usage Monitor").font(.title2.weight(.semibold))
+            Image(systemName: "sparkles").font(.system(size: 40)).foregroundStyle(Palette.series[1])
+            Text("AI Usage Monitor").font(.title2.weight(.semibold))
             Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development")").foregroundStyle(.secondary)
-            Text("A local-first monitor for Claude Code usage. All data stays on this Mac.").multilineTextAlignment(.center).frame(maxWidth: 380)
+            Text("A local-first monitor for the usage of AI coding tools: Claude Code, and the Codex engine behind the Codex apps and ChatGPT Work. All data stays on this Mac.").multilineTextAlignment(.center).frame(maxWidth: 380)
             Divider().frame(width: 300)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Data folder: ~/Library/Application Support/ClaudeUsageMonitor").font(.caption)
-                Text("Reads: ~/.claude/projects (transcripts), ~/.claude/sessions (live processes)").font(.caption)
+                Text("Reads: ~/.claude/projects and ~/.claude/sessions (Claude Code), ~/.codex/sessions and archived_sessions (Codex)").font(.caption)
+                Text("Never reads: credentials, message text, tool output").font(.caption)
                 Text("Network: none").font(.caption)
             }.foregroundStyle(.secondary)
         }

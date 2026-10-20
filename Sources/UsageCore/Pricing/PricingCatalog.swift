@@ -6,6 +6,7 @@ import Foundation
 /// gives an exact whole number of pico-USD, which keeps sums over millions of requests free of
 /// floating point error.
 public struct PriceRate: Sendable, Equatable {
+    public var provider: ProviderID
     public var modelKey: String
     public var effectiveFromMs: Int64
     /// The rate applies when the request's logical input is at least this many tokens.
@@ -21,10 +22,11 @@ public struct PriceRate: Sendable, Equatable {
     public var note: String?
 
     /// Builds a rate from dollar prices per million tokens.
-    public init(model: String, from: Int64 = 0, promptMin: Int64 = 0, promptMax: Int64? = nil, speed: String = "standard",
+    public init(provider: ProviderID, model: String, from: Int64 = 0, promptMin: Int64 = 0, promptMax: Int64? = nil, speed: String = "standard",
                 input: Double, output: Double, cacheRead: Double, cache5m: Double? = nil, cache1h: Double? = nil,
                 note: String? = nil) {
         func micros(_ usd: Double) -> Int64 { Int64((usd * 1_000_000).rounded()) }
+        self.provider = provider
         self.modelKey = model
         self.effectiveFromMs = from
         self.promptMin = promptMin
@@ -33,55 +35,12 @@ public struct PriceRate: Sendable, Equatable {
         self.inputMicrosPerMTok = micros(input)
         self.outputMicrosPerMTok = micros(output)
         self.cacheReadMicrosPerMTok = micros(cacheRead)
-        // Anthropic bills 5-minute cache writes at 1.25x and 1-hour writes at 2x the input rate.
+        // Cache writes default to the premium that some providers charge (1.25x for a short lifetime, 2x for a long one).
+        // A provider that does not charge extra for cache writes supplies explicit rates equal to its input rate.
         self.cache5mMicrosPerMTok = micros(cache5m ?? input * 1.25)
         self.cache1hMicrosPerMTok = micros(cache1h ?? input * 2)
         self.note = note
     }
-}
-
-/// The built-in API list prices.
-///
-/// These are the published per-token API prices. They estimate what the same usage would cost on
-/// the pay-as-you-go API, and say nothing about subscription billing. Prices change, so rates are
-/// dated: a new price is added as a new row with a later `effectiveFromMs` instead of editing an
-/// old one, which keeps estimates for past usage stable.
-///
-/// A model that has no rate card is reported as unpriced; no generic price is ever substituted.
-public enum PricingCatalog {
-    public static let asOf = "2026-10-06"
-
-    public static let builtin: [PriceRate] = {
-        let src = "Anthropic list price, checked \(asOf)."
-        var rates: [PriceRate] = []
-        func add(_ m: String, _ i: Double, _ o: Double, _ cr: Double, note: String? = nil) {
-            rates.append(PriceRate(model: m, input: i, output: o, cacheRead: cr, note: note ?? src))
-        }
-        add("claude-fable-5-1", 10, 50, 0.25)
-        add("claude-fable-5", 10, 50, 1.00)
-        add("claude-opus-5-5", 4, 20, 0.20)
-        add("claude-opus-5", 5, 25, 0.50)
-        add("claude-opus-4-8", 5, 25, 0.50)
-        add("claude-opus-4-7", 5, 25, 0.50)
-        add("claude-opus-4-6", 5, 25, 0.50)
-        add("claude-sonnet-5-5", 2, 10, 0.20)
-        add("claude-sonnet-5", 2, 10, 0.20)
-        add("claude-sonnet-4-6", 3, 15, 0.30)
-        add("claude-haiku-4-5", 1, 5, 0.10)
-
-        // Haiku 5.5 has two rate cards, chosen by prompt length.
-        let tierNote = "Two rate cards split at a 100K-token prompt. \(src)"
-        rates.append(PriceRate(model: "claude-haiku-5-5", promptMin: 0, promptMax: 100_001,
-                               input: 0.10, output: 0.50, cacheRead: 0.01, note: tierNote))
-        rates.append(PriceRate(model: "claude-haiku-5-5", promptMin: 100_001, promptMax: nil,
-                               input: 0.50, output: 2.50, cacheRead: 0.05, note: tierNote))
-
-        // Fast mode is billed at twice the standard rate on the models that offer it.
-        let fastNote = "Fast mode, billed at 2x the standard rate. \(src)"
-        rates.append(PriceRate(model: "claude-opus-5-5", speed: "fast", input: 8, output: 40, cacheRead: 0.40, note: fastNote))
-        rates.append(PriceRate(model: "claude-opus-5", speed: "fast", input: 10, output: 50, cacheRead: 1.00, note: fastNote))
-        return rates
-    }()
 }
 
 public enum PricingStore {
@@ -89,7 +48,7 @@ public enum PricingStore {
     static var catalogFingerprint: String {
         var text = PricingCatalog.asOf
         for r in PricingCatalog.builtin {
-            text += "|\(r.modelKey),\(r.promptMin),\(r.promptMax ?? -1),\(r.speed),\(r.inputMicrosPerMTok),\(r.outputMicrosPerMTok),\(r.cacheReadMicrosPerMTok),\(r.cache5mMicrosPerMTok),\(r.cache1hMicrosPerMTok)"
+            text += "|\(r.provider.rawValue),\(r.modelKey),\(r.promptMin),\(r.promptMax ?? -1),\(r.speed),\(r.inputMicrosPerMTok),\(r.outputMicrosPerMTok),\(r.cacheReadMicrosPerMTok),\(r.cache5mMicrosPerMTok),\(r.cache1hMicrosPerMTok)"
         }
         return FNV.hash(Array(text.utf8), count: text.utf8.count)
     }
@@ -114,19 +73,19 @@ public enum PricingStore {
     public static func upsertUserRate(_ db: UsageDatabase, _ rate: PriceRate) throws {
         try db.write { c in
             try c.run("""
-                DELETE FROM price_rate WHERE model_key = ? AND effective_from = ? AND prompt_min = ? AND speed = ?
-                """, [.text(rate.modelKey), .int(rate.effectiveFromMs), .int(rate.promptMin), .text(rate.speed)])
+                DELETE FROM price_rate WHERE provider_id = ? AND model_key = ? AND effective_from = ? AND prompt_min = ? AND speed = ?
+                """, [.text(rate.provider.rawValue), .text(rate.modelKey), .int(rate.effectiveFromMs), .int(rate.promptMin), .text(rate.speed)])
             try insert(c, rate, origin: "user")
         }
     }
 
     private static func insert(_ c: SQLiteConnection, _ r: PriceRate, origin: String) throws {
         try c.run("""
-            INSERT OR REPLACE INTO price_rate(model_key, effective_from, prompt_min, prompt_max, speed,
+            INSERT OR REPLACE INTO price_rate(provider_id, model_key, effective_from, prompt_min, prompt_max, speed,
                 input_micros_per_mtok, output_micros_per_mtok, cache_read_micros_per_mtok,
                 cache_5m_micros_per_mtok, cache_1h_micros_per_mtok, origin, note)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [.text(r.modelKey), .int(r.effectiveFromMs), .int(r.promptMin), .optional(r.promptMax), .text(r.speed),
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [.text(r.provider.rawValue), .text(r.modelKey), .int(r.effectiveFromMs), .int(r.promptMin), .optional(r.promptMax), .text(r.speed),
                   .int(r.inputMicrosPerMTok), .int(r.outputMicrosPerMTok), .int(r.cacheReadMicrosPerMTok),
                   .int(r.cache5mMicrosPerMTok), .int(r.cache1hMicrosPerMTok), .text(origin), .optional(r.note)])
     }
@@ -137,12 +96,16 @@ public enum PricingStore {
 /// Costs are computed at query time from the rate card that was in effect when each request was
 /// made, rather than stored on the request. That keeps the request records immutable while letting
 /// a corrected rate card repair estimates.
+///
+/// A token category that the source did not report is treated as zero for pricing, and the coverage
+/// columns say how many requests that affected.
 enum CostSQL {
     /// Joins the effective rate card onto an aliased `model_request r`. Requires the `model m` join.
     static let join = """
         LEFT JOIN price_rate p ON p.id = (
             SELECT pr.id FROM price_rate pr
-            WHERE pr.model_key = m.canonical AND pr.speed = COALESCE(r.speed, 'standard')
+            WHERE pr.provider_id = m.provider_id AND pr.model_key = m.canonical
+              AND pr.speed = COALESCE(r.speed, 'standard')
               AND pr.effective_from <= r.requested_at
               AND r.logical_input_tokens >= pr.prompt_min
               AND (pr.prompt_max IS NULL OR r.logical_input_tokens < pr.prompt_max)
@@ -150,14 +113,15 @@ enum CostSQL {
         """
 
     /// Pico-USD cost of one request row. Cache writes whose TTL the source did not state are priced
-    /// at the cheaper five-minute rate, which makes the estimate a lower bound for them.
+    /// at the cheaper five-minute rate, which makes the estimate a lower bound for them. Reasoning tokens
+    /// are part of the output tokens and are therefore not priced a second time.
     static let picoUSD = """
-        COALESCE(r.input_tokens * p.input_micros_per_mtok
+        COALESCE(COALESCE(r.uncached_input_tokens, 0) * p.input_micros_per_mtok
                + r.output_tokens * p.output_micros_per_mtok
-               + r.cache_read_tokens * p.cache_read_micros_per_mtok
+               + COALESCE(r.cache_read_tokens, 0) * p.cache_read_micros_per_mtok
                + COALESCE(r.cache_creation_5m_tokens, 0) * p.cache_5m_micros_per_mtok
                + COALESCE(r.cache_creation_1h_tokens, 0) * p.cache_1h_micros_per_mtok
-               + max(0, r.cache_creation_tokens - COALESCE(r.cache_creation_5m_tokens, 0) - COALESCE(r.cache_creation_1h_tokens, 0))
+               + max(0, COALESCE(r.cache_creation_tokens, 0) - COALESCE(r.cache_creation_5m_tokens, 0) - COALESCE(r.cache_creation_1h_tokens, 0))
                  * p.cache_5m_micros_per_mtok, 0)
         """
 
@@ -165,20 +129,45 @@ enum CostSQL {
         CASE WHEN p.id IS NULL THEN r.logical_input_tokens + r.output_tokens ELSE 0 END
         """
 
-    /// Column list that yields token sums, request count and cost, in the order `readTotals` expects.
+    /// The number of columns that `aggregateColumns` yields.
+    static let aggregateWidth: Int32 = 16
+
+    /// Column list that yields request count, token sums, cost and coverage, in the order `readAggregate` expects.
     static let aggregateColumns = """
         count(r.id),
-        COALESCE(sum(r.input_tokens), 0), COALESCE(sum(r.output_tokens), 0),
+        COALESCE(sum(r.uncached_input_tokens), 0), COALESCE(sum(r.output_tokens), 0),
         COALESCE(sum(r.cache_read_tokens), 0), COALESCE(sum(r.cache_creation_tokens), 0),
         COALESCE(sum(COALESCE(r.cache_creation_5m_tokens, 0)), 0), COALESCE(sum(COALESCE(r.cache_creation_1h_tokens, 0)), 0),
-        COALESCE(sum(\(picoUSD)), 0), COALESCE(sum(\(unpricedTokens)), 0)
+        COALESCE(sum(r.reasoning_output_tokens), 0),
+        COALESCE(sum(\(picoUSD)), 0), COALESCE(sum(\(unpricedTokens)), 0),
+        COALESCE(sum(r.uncached_input_tokens IS NULL), 0), COALESCE(sum(r.cache_read_tokens IS NULL), 0),
+        COALESCE(sum(r.cache_creation_tokens IS NULL), 0), COALESCE(sum(r.reasoning_output_tokens IS NULL), 0),
+        COALESCE(sum(r.completeness = 'reconciledFromTotals'), 0), COALESCE(sum(r.completeness = 'partial'), 0)
         """
 
-    /// Reads the nine aggregate columns starting at `offset`.
-    static func readAggregate(_ row: SQLiteRow, from offset: Int32) -> (requests: Int, tokens: TokenCounts, cost: EstimatedCost) {
+    struct Aggregate {
+        var requests: Int
+        var tokens: TokenCounts
+        var cost: EstimatedCost
+        var coverage: UsageCoverage
+    }
+
+    /// Reads the `aggregateWidth` aggregate columns starting at `offset`.
+    static func readAggregate(_ row: SQLiteRow, from offset: Int32) -> Aggregate {
         let tokens = TokenCounts(uncachedInput: row.int(offset + 1), output: row.int(offset + 2),
                                  cacheRead: row.int(offset + 3), cacheCreation: row.int(offset + 4),
-                                 cacheCreation5m: row.int(offset + 5), cacheCreation1h: row.int(offset + 6))
-        return (Int(row.int(offset)), tokens, EstimatedCost(picoUSD: row.int(offset + 7), unpricedTokens: row.int(offset + 8)))
+                                 cacheCreation5m: row.int(offset + 5), cacheCreation1h: row.int(offset + 6),
+                                 reasoningOutput: row.int(offset + 7))
+        var coverage = UsageCoverage()
+        coverage.requests = Int(row.int(offset))
+        coverage.missingUncachedInput = Int(row.int(offset + 10))
+        coverage.missingCacheRead = Int(row.int(offset + 11))
+        coverage.missingCacheCreation = Int(row.int(offset + 12))
+        coverage.missingReasoning = Int(row.int(offset + 13))
+        coverage.reconciledRequests = Int(row.int(offset + 14))
+        coverage.partialRequests = Int(row.int(offset + 15))
+        return Aggregate(requests: Int(row.int(offset)), tokens: tokens,
+                         cost: EstimatedCost(picoUSD: row.int(offset + 8), unpricedTokens: row.int(offset + 9)),
+                         coverage: coverage)
     }
 }

@@ -80,3 +80,21 @@ The first always-on build recomputed the full dashboard summaries on every file 
 * **Cheap checkpoints.** Reconciliation compares file metadata only.
 
 Memory behaviour during the app's own sampling shows no growth trend; run `ccu bench` and the Diagnostics page's resource panel to reproduce the numbers on your machine.
+
+
+## Multi-provider measurements
+
+Same machine, release build, real history of both providers: Claude (793 files, 4.8 GB) and Codex (232 files, 862 MB uncompressed, 212 of them zstd-compressed).
+
+```
+-- initial import (ccu bench)
+claude-code-transcripts: files=793 changed=793 bytes_read=4.827.545.587 lines=655.596 seconds=5.77 peak_rss_mb=31.5
+codex-rollouts:          files=232 changed=232 bytes_read=862.131.548   lines=31.481  seconds=1.44 peak_rss_mb=48.3
+-- second pass (nothing changed)
+claude-code-transcripts: seconds=0.06      codex-rollouts: seconds=0.01
+database_size_mb=36.7
+```
+
+* The Codex import includes decompressing 212 files. Compressed files are immutable and read once. Plain files that grow are read again from their start, which is cheap at these sizes (the largest active session is a few megabytes).
+* Installed app, steady state (menu bar only, both providers, database already imported): about **78 MB resident and 0 % CPU**, no network sockets. Immediately after the very first import the process can hold about 180 MB until it settles, because the allocator keeps freed pages.
+* Query latency on the combined database: overview, session table, series and breakdowns each about 100 to 170 ms.

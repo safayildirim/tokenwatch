@@ -58,8 +58,8 @@ public struct ExportService: Sendable {
     // MARK: Entry point
 
     public func export(kind: ExportKind, format: ExportFormat, range: ClosedRange<Date>? = nil, to url: URL,
-                       calendar: Calendar = .current) throws -> ExportResult {
-        var filter = UsageFilter()
+                       calendar: Calendar = .current, filter base: UsageFilter = UsageFilter()) throws -> ExportResult {
+        var filter = base
         if let range { filter.from = range.lowerBound; filter.to = range.upperBound.addingTimeInterval(0.001) }
 
         let columns: [Column]
@@ -71,7 +71,9 @@ public struct ExportService: Sendable {
             try sink.begin(columns)
             for s in try analytics.sessionRows(filter) {
                 try sink.write([
-                    .text(s.externalID), .text(s.projectName), .text(s.projectPath ?? ""), .text(s.application ?? ""),
+                    .text(s.externalID), .text(s.provider.rawValue), .text(s.productID.rawValue), .text(s.accountLabel),
+                    .text(s.surface?.rawValue ?? ""), .text(s.kind.rawValue),
+                    .text(s.projectName), .text(s.projectPath ?? ""),
                     .text(s.models.joined(separator: "; ")), .text(s.status.label),
                     .text(s.startedAt.map(Self.iso) ?? ""), .text(s.lastActivityAt.map(Self.iso) ?? ""),
                     s.duration.map { .real($0) } ?? .null, .int(Int64(s.requests)),
@@ -101,7 +103,7 @@ public struct ExportService: Sendable {
             columns = Self.modelColumns
             try sink.begin(columns)
             for m in try analytics.models(filter) {
-                try sink.write([.text(m.canonical), .text(m.displayName), .int(Int64(m.requests)),
+                try sink.write([.text(m.provider.rawValue), .text(m.canonical), .text(m.displayName), .int(Int64(m.requests)),
                                 .int(m.tokens.uncachedInput), .int(m.tokens.output), .int(m.tokens.cacheRead),
                                 .int(m.tokens.cacheCreation), .int(m.tokens.totalProcessed), .real(m.tokenShare),
                                 m.tokens.cacheHitRatio.map { .real($0) } ?? .null,
@@ -126,11 +128,19 @@ public struct ExportService: Sendable {
             let to = filter.to.map(Clock.ms) ?? Int64.max
             let snapshots: [[Cell]] = try db.read { c in
                 try c.query("""
-                    SELECT window_kind, utilization_pct, resets_at, observed_at, provider, authority
-                    FROM quota_snapshot WHERE observed_at >= ? AND observed_at < ? ORDER BY observed_at
+                    SELECT p.provider_id, a.label, p.pool_key, w.window_key, w.duration_minutes, sn.utilization_pct,
+                           sn.resets_at, sn.observed_at, sn.last_confirmed_at, sn.telemetry_source_id, sn.authority
+                    FROM quota_snapshot sn
+                    JOIN quota_window w ON w.id = sn.window_id
+                    JOIN quota_pool p ON p.id = w.pool_id
+                    JOIN account a ON a.id = p.account_id
+                    WHERE sn.observed_at >= ? AND sn.observed_at < ? ORDER BY sn.observed_at
                     """, [.int(from), .int(to)]) { r in
-                    [.text(r.text(0)), .real(r.double(1)), .text(r.intOrNil(2).map { Self.iso(Clock.date(ms: $0)) } ?? ""),
-                     .text(Self.iso(Clock.date(ms: r.int(3)))), .text(r.text(4)), .text(r.text(5))]
+                    [.text(r.text(0)), .text(r.text(1)), .text(r.text(2)), .text(r.text(3)),
+                     r.intOrNil(4).map { .int($0) } ?? .null, .real(r.double(5)),
+                     .text(r.intOrNil(6).map { Self.iso(Clock.date(ms: $0)) } ?? ""),
+                     .text(Self.iso(Clock.date(ms: r.int(7)))), .text(Self.iso(Clock.date(ms: r.int(8)))),
+                     .text(r.text(9)), .text(r.text(10))]
                 }
             }
             for s in snapshots { try sink.write(s); rows += 1 }
@@ -145,28 +155,32 @@ public struct ExportService: Sendable {
         var count = 0
         try db.read { c in
             let stmt = try c.prepare("""
-                SELECT r.request_key, r.api_request_id, s.external_id, r.agent_key, r.model_id, r.requested_at,
-                       r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens,
-                       r.cache_creation_5m_tokens, r.cache_creation_1h_tokens, r.speed, r.stop_reason,
-                       \(CostSQL.picoUSD), p.id IS NULL
+                SELECT r.request_key, r.api_request_id, s.external_id, r.agent_key, m.raw_id, r.requested_at,
+                       r.uncached_input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens,
+                       r.cache_creation_5m_tokens, r.cache_creation_1h_tokens, r.reasoning_output_tokens,
+                       r.speed, r.stop_reason, r.completeness, r.normalization,
+                       \(CostSQL.picoUSD), p.id IS NULL, r.product_id, m.provider_id
                 FROM model_request r JOIN session s ON s.id = r.session_id JOIN model m ON m.id = r.model_id
                 LEFT JOIN project pj ON pj.id = s.project_id \(CostSQL.join)
                 \(w.sql) ORDER BY r.requested_at, r.id
                 """)
             try stmt.bind(w.params)
             defer { stmt.reset() }
+            func optional(_ row: SQLiteRow, _ i: Int32) -> Cell { row.intOrNil(i).map { .int($0) } ?? .null }
             while try stmt.step() {
                 let row = SQLiteRow(stmt: stmt)
-                let pico = row.int(14)
-                let unpriced = row.int(15) != 0
-                let uncached = row.int(6), out = row.int(7), cr = row.int(8), cc = row.int(9)
+                let pico = row.int(17)
+                let unpriced = row.int(18) != 0
+                let uncached = row.intOrNil(6) ?? 0, out = row.int(7), cr = row.intOrNil(8) ?? 0, cc = row.intOrNil(9) ?? 0
                 try sink.write([
                     .text(row.text(0)), .text(row.textOrNil(1) ?? ""), .text(row.text(2)), .text(row.textOrNil(3) ?? ""),
+                    .text(row.text(20)), .text(row.text(19)),
                     .text(row.text(4)), .text(Self.iso(Clock.date(ms: row.int(5)))), .int(row.int(5)),
-                    .int(uncached), .int(out), .int(cr), .int(cc),
-                    row.intOrNil(10).map { .int($0) } ?? .null, row.intOrNil(11).map { .int($0) } ?? .null,
+                    optional(row, 6), .int(out), optional(row, 8), optional(row, 9),
+                    optional(row, 10), optional(row, 11), optional(row, 12),
                     .int(uncached + cr + cc), .int(uncached + cr + cc + out),
-                    .text(row.textOrNil(12) ?? ""), .text(row.textOrNil(13) ?? ""),
+                    .text(row.textOrNil(13) ?? ""), .text(row.textOrNil(14) ?? ""),
+                    .text(row.text(15)), .text(row.text(16)),
                     unpriced ? .null : .int(pico), unpriced ? .text("") : .text(Self.usd(pico)),
                 ])
                 count += 1
@@ -217,10 +231,14 @@ public struct ExportService: Sendable {
     ]
 
     static let sessionColumns: [Column] = [
-        Column(name: "session_id", unit: "", definition: "The session identifier assigned by Claude Code."),
+        Column(name: "session_id", unit: "", definition: "The session identifier assigned by the product."),
+        Column(name: "provider", unit: "", definition: "The provider that delivered the model."),
+        Column(name: "product", unit: "", definition: "The product that produced the session."),
+        Column(name: "account", unit: "", definition: "A short label of the account. It is derived from a one-way hash, and Unassigned means the source did not say."),
+        Column(name: "surface", unit: "", definition: "Where the session ran, for example a terminal, an editor or a desktop application."),
+        Column(name: "kind", unit: "", definition: "main, subagent or review."),
         Column(name: "project", unit: "", definition: "Project name derived from the working directory."),
         Column(name: "project_path", unit: "", definition: "Project root directory, when known."),
-        Column(name: "application", unit: "", definition: "Where the session ran: cli, claude-vscode or claude-desktop."),
         Column(name: "models", unit: "", definition: "Models used, most-used first."),
         Column(name: "status", unit: "", definition: "Active, Idle, Completed or Unknown. A status marked (inferred) is guessed from recent activity rather than observed."),
         Column(name: "started_at", unit: "ISO 8601 UTC", definition: "Time of the first record of the session."),
@@ -232,24 +250,29 @@ public struct ExportService: Sendable {
         Column(name: "total_processed_tokens", unit: "tokens", definition: "logical_input + output."),
         Column(name: "cache_hit_ratio", unit: "ratio 0-1", definition: "cache_read / logical_input."),
     ] + costColumns + [
-        Column(name: "claude_code_reported_cost_usd", unit: "USD", definition: "The cost summary Claude Code itself recorded for the session. Kept separate from the estimate."),
+        Column(name: "source_reported_cost_usd", unit: "USD", definition: "The cost summary that the source itself recorded for the session, for the sources that do. Kept separate from the estimate."),
     ]
 
     static let requestColumns: [Column] = [
-        Column(name: "request_key", unit: "", definition: "Stable request identity (the API message id)."),
+        Column(name: "request_key", unit: "", definition: "Stable request identity within the product (the API message id or response id when the source records one)."),
         Column(name: "api_request_id", unit: "", definition: "Server-assigned request id, when recorded."),
         Column(name: "session_id", unit: "", definition: "Owning session."),
         Column(name: "agent_id", unit: "", definition: "Sub-agent that made the request. Empty for the main conversation."),
+        Column(name: "provider", unit: "", definition: "The provider that delivered the model."),
+        Column(name: "product", unit: "", definition: "The product that made the request."),
         Column(name: "model", unit: "", definition: "Model identifier as reported."),
         Column(name: "requested_at", unit: "ISO 8601 UTC", definition: "Time of the first record of the request."),
         Column(name: "requested_at_epoch_ms", unit: "milliseconds", definition: "Same instant as milliseconds since 1970-01-01 UTC."),
     ] + tokenColumns() + [
         Column(name: "cache_creation_5m_tokens", unit: "tokens", definition: "Portion of cache_creation written with a five-minute lifetime, when the source states it."),
         Column(name: "cache_creation_1h_tokens", unit: "tokens", definition: "Portion of cache_creation written with a one-hour lifetime, when the source states it."),
-        Column(name: "logical_input_tokens", unit: "tokens", definition: "uncached_input + cache_read + cache_creation."),
+        Column(name: "reasoning_output_tokens", unit: "tokens", definition: "The part of output_tokens spent on reasoning. It is already included in output_tokens and is never added to it. Empty when the source does not report it."),
+        Column(name: "logical_input_tokens", unit: "tokens", definition: "uncached_input + cache_read + cache_creation. A category the source did not report counts as zero here."),
         Column(name: "total_processed_tokens", unit: "tokens", definition: "logical_input + output."),
         Column(name: "speed", unit: "", definition: "Service speed reported with the request."),
         Column(name: "stop_reason", unit: "", definition: "Why the model stopped."),
+        Column(name: "completeness", unit: "", definition: "complete, reconciledFromTotals (derived from cumulative counters) or partial."),
+        Column(name: "normalization", unit: "", definition: "The rule used to convert the source's token counts into these categories."),
     ] + Array(costColumns.prefix(2))
 
     static let projectColumns: [Column] = [
@@ -263,6 +286,7 @@ public struct ExportService: Sendable {
     ] + costColumns
 
     static let modelColumns: [Column] = [
+        Column(name: "provider", unit: "", definition: "The provider that delivered the model."),
         Column(name: "model", unit: "", definition: "Canonical model key."),
         Column(name: "display_name", unit: "", definition: "Readable model name."),
         Column(name: "requests", unit: "count", definition: "Distinct model requests."),
@@ -281,11 +305,16 @@ public struct ExportService: Sendable {
     ] + costColumns
 
     static let quotaColumns: [Column] = [
-        Column(name: "window", unit: "", definition: "five_hour, seven_day or spend_limit."),
-        Column(name: "utilization_percent", unit: "percent", definition: "Percentage of the allowance consumed, as reported by Claude. Never derived from token counts."),
+        Column(name: "provider", unit: "", definition: "The provider that enforces the allowance."),
+        Column(name: "account", unit: "", definition: "A short label of the account that owns the pool."),
+        Column(name: "pool", unit: "", definition: "The quota pool that the window belongs to. Pools are never added together."),
+        Column(name: "window", unit: "", definition: "The window key, which is its length in minutes for fixed windows, such as 300m or 10080m."),
+        Column(name: "window_minutes", unit: "minutes", definition: "The length of the window, when it has a fixed length."),
+        Column(name: "utilization_percent", unit: "percent", definition: "Percentage of the allowance consumed, as reported by the provider. Never derived from token counts."),
         Column(name: "resets_at", unit: "ISO 8601 UTC", definition: "When the window resets."),
-        Column(name: "observed_at", unit: "ISO 8601 UTC", definition: "When the value was reported."),
-        Column(name: "provider", unit: "", definition: "Where the value came from."),
+        Column(name: "observed_at", unit: "ISO 8601 UTC", definition: "When the value was first reported."),
+        Column(name: "last_confirmed_at", unit: "ISO 8601 UTC", definition: "When the same value was most recently reported again."),
+        Column(name: "telemetry_source", unit: "", definition: "Where the value came from."),
         Column(name: "authority", unit: "", definition: "authoritative or unverified."),
     ]
 
@@ -296,7 +325,7 @@ public struct ExportService: Sendable {
             "time_zone": calendar.timeZone.identifier,
             "rows": rows,
             "pricing_note": "Cost columns are API-equivalent estimates from published list prices (as of \(PricingCatalog.asOf)). They are not subscription charges.",
-            "quota_note": "Subscription utilization is only ever taken from values reported by Claude. It is never computed from token counts.",
+            "quota_note": "Subscription utilization is only ever taken from values reported by the provider. It is never computed from token counts, and the utilization of different pools is never added together.",
             "privacy_note": "Contains usage metadata only. No prompts, responses, source code or credentials.",
             "columns": columns.map { ["name": $0.name, "unit": $0.unit, "definition": $0.definition] },
         ]

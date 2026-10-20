@@ -55,12 +55,15 @@ struct SessionDetailView: View {
                 }
                 Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 3) {
                     GridRow { Text("Session").foregroundStyle(.secondary); Text(r.externalID).monospaced().textSelection(.enabled) }
-                    GridRow { Text("Source").foregroundStyle(.secondary); Label(Fmt.applicationName(r.application), systemImage: Fmt.applicationSymbol(r.application)) }
+                    GridRow { Text("Product").foregroundStyle(.secondary); HStack { Text(model.productName(r.productID)); ProviderChip(provider: r.provider) } }
+                    GridRow { Text("Where it ran").foregroundStyle(.secondary); Label(model.surfaceName(r.surface), systemImage: model.surfaceSymbol(r.surface)) }
+                    GridRow { Text("Account").foregroundStyle(.secondary); Text(r.accountLabel == "Unassigned" ? "Not identified by the source" : r.accountLabel) }
+                    if r.kind != .main { GridRow { Text("Kind").foregroundStyle(.secondary); Text(r.kind == .review ? "Automatic review thread" : "Started by another session") } }
                     GridRow { Text("Started").foregroundStyle(.secondary); Text(Fmt.dateTime(r.startedAt)) }
                     GridRow { Text("Last activity").foregroundStyle(.secondary); Text("\(Fmt.dateTime(r.lastActivityAt)) (\(Fmt.relative(r.lastActivityAt)))") }
                     GridRow { Text("Duration").foregroundStyle(.secondary); Text(r.duration.map(Fmt.duration) ?? "—") }
                     if let cwd = r.cwd { GridRow { Text("Folder").foregroundStyle(.secondary); Text(cwd).textSelection(.enabled).lineLimit(1).truncationMode(.middle) } }
-                    if let v = r.clientVersion { GridRow { Text("Claude Code").foregroundStyle(.secondary); Text(v) } }
+                    if let v = r.clientVersion { GridRow { Text("Version").foregroundStyle(.secondary); Text(v) } }
                 }
                 .font(.callout)
                 if r.status.basis == .inferred {
@@ -80,9 +83,9 @@ struct SessionDetailView: View {
             if model.settings.showEstimatedCost {
                 KPITile(title: "API-equivalent cost", value: Fmt.cost(r.cost), detail: "estimate from list prices")
                 if let reported = r.reportedCostUSD {
-                    KPITile(title: "Claude Code's own estimate", value: String(format: "$%.2f", reported),
-                            detail: "recorded by Claude Code, kept separate",
-                            help: "Claude Code writes its own cost summary into the session. It is shown next to, never mixed with, the estimate above.")
+                    KPITile(title: "The tool's own estimate", value: String(format: "$%.2f", reported),
+                            detail: "recorded by \(model.productName(r.productID)), kept separate",
+                            help: "Some tools write their own cost summary into the session. It is shown next to, never mixed with, the estimate above.")
                 }
             }
         }
@@ -247,17 +250,17 @@ struct SessionDetailView: View {
 
     private func windowsCard(_ d: SessionDetail) -> some View {
         Card("Quota window context",
-             subtitle: "Which subscription windows this session overlapped. Shares below describe locally observed activity only.") {
+             subtitle: "Which windows of this account's allowance this session overlapped. Shares below describe locally observed activity only.") {
             if d.windows.isEmpty {
-                Text("No authoritative quota history covers this session. Install the status line helper in Settings to record quota windows going forward.")
+                Text("No authoritative quota history covers this session.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach(d.windows) { w in
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("\(w.kind == "five_hour" ? "Five-hour" : "Weekly") window ending \(Fmt.dateTime(w.windowEnd))").font(.callout.weight(.medium))
+                    Text("\(WindowNaming.displayName(minutes: w.windowMinutes, fallbackKey: w.windowKey)) window ending \(Fmt.dateTime(w.windowEnd))").font(.callout.weight(.medium))
                     HStack(spacing: 18) {
                         if let peak = w.reportedPeakUtilization {
-                            Label("Account reached \(Int(peak.rounded()))% (reported by Claude)", systemImage: "checkmark.seal")
+                            Label("Account reached \(Int(peak.rounded()))% (reported by \(model.providerName(d.row.provider)))", systemImage: "checkmark.seal")
                         }
                         if let share = w.shareOfObservedFreshTokens {
                             Label("\(Fmt.ratio(share)) of the new tokens observed on this Mac in that window", systemImage: "chart.pie")
@@ -267,7 +270,7 @@ struct SessionDetailView: View {
                 Divider()
             }
             if !d.windows.isEmpty {
-                Text("A session's share of observed tokens is not the share of your allowance it used. Usage from other devices and Claude apps also counts toward the account figure, and Claude's metering is not a simple token count.")
+                Text("A session's share of observed tokens is not the share of your allowance it used. Usage from other devices and apps also counts toward the account figure, and a provider's metering is not a simple token count.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

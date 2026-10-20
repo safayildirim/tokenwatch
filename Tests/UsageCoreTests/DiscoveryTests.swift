@@ -27,9 +27,9 @@ final class AdapterPathTests: XCTestCase {
     }
 
     func testProjectKeyEncodingMatchesClaudeCodeFolderNames() {
-        XCTAssertEqual(IngestWriter.encodeProjectKey("/Users/safayildirim/Desktop/repos/claude-usage-tracker"),
+        XCTAssertEqual(ClaudeCodeAdapter.encodeProjectKey("/Users/safayildirim/Desktop/repos/claude-usage-tracker"),
                        "-Users-safayildirim-Desktop-repos-claude-usage-tracker")
-        XCTAssertEqual(IngestWriter.encodeProjectKey("/Users/a b/c.d_e"), "-Users-a-b-c-d-e")
+        XCTAssertEqual(ClaudeCodeAdapter.encodeProjectKey("/Users/a b/c.d_e"), "-Users-a-b-c-d-e")
     }
 }
 
@@ -53,8 +53,8 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(b.tokens.output, 12)
         XCTAssertEqual(a.projectName, "alpha")
         XCTAssertEqual(b.projectName, "beta")
-        XCTAssertEqual(a.application, "cli")
-        XCTAssertEqual(b.application, "claude-vscode")
+        XCTAssertEqual(a.surface, .terminal)
+        XCTAssertEqual(b.surface, .vscode)
         XCTAssertEqual(a.startedAt, Clock.date(ms: t0))
         XCTAssertEqual(b.lastActivityAt, Clock.date(ms: t0 + 3000))
     }
@@ -267,9 +267,9 @@ final class CollectorLifecycleTests: XCTestCase {
         await collector.start()
         try await waitUntil { try env.totals().tokens.output == 8 }
         let snap = await collector.snapshot()
-        let broken = snap.sources.first { $0.sourceID == "broken" }
+        let broken = snap.sources.first { $0.sourceID.rawValue == "broken" }
         XCTAssertNotNil(broken?.lastError)
-        XCTAssertEqual(snap.sources.first { $0.sourceID == "claude-code" }?.state, .ok)
+        XCTAssertEqual(snap.sources.first { $0.sourceID == .claudeTranscripts }?.state, .ok)
         await collector.stop()
     }
 
@@ -320,7 +320,7 @@ final class CollectorLifecycleTests: XCTestCase {
 private struct DeafAdapter: SourceAdapter {
     let base: ClaudeCodeAdapter
     let watchRoot: URL
-    var sourceID: String { base.sourceID }
+    var sourceID: TelemetrySourceID { base.sourceID }
     var displayName: String { base.displayName }
     var watchRoots: [URL] { [watchRoot] }
     var coverageNote: String { "" }
@@ -330,7 +330,7 @@ private struct DeafAdapter: SourceAdapter {
 }
 
 private struct BrokenAdapter: SourceAdapter {
-    var sourceID: String { "broken" }
+    var sourceID: TelemetrySourceID { TelemetrySourceID(rawValue: "broken") }
     var displayName: String { "Broken" }
     var watchRoots: [URL] { [FileManager.default.temporaryDirectory] }
     var coverageNote: String { "" }

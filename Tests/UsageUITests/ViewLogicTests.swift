@@ -41,11 +41,6 @@ final class FormatterTests: XCTestCase {
         XCTAssertEqual(Fmt.ratio(nil), "—")
     }
 
-    func testApplicationNames() {
-        XCTAssertEqual(Fmt.applicationName("cli"), "Terminal")
-        XCTAssertEqual(Fmt.applicationName("claude-vscode"), "VS Code")
-        XCTAssertEqual(Fmt.applicationName("claude-desktop"), "Claude Desktop")
-    }
 }
 
 final class RangeAndFilterTests: XCTestCase {
@@ -76,8 +71,9 @@ final class RangeAndFilterTests: XCTestCase {
     }
 
     private func row(_ state: SessionState) -> SessionRow {
-        SessionRow(id: Int64(state.hashValue & 0xFFFF), externalID: "x", sourceID: "s", projectID: nil, projectName: "p", projectPath: nil,
-                   application: "cli", clientVersion: nil, cwd: nil, startedAt: nil, lastActivityAt: nil, observedEndedAt: nil,
+        SessionRow(id: Int64(state.hashValue & 0xFFFF), externalID: "x", productID: .claudeCode, provider: .anthropic, sourceID: .claudeTranscripts,
+                   accountID: 1, accountLabel: "Unassigned", surface: .terminal, kind: .main, projectID: nil, projectName: "p", projectPath: nil,
+                   clientVersion: nil, cwd: nil, startedAt: nil, lastActivityAt: nil, observedEndedAt: nil,
                    tokens: .zero, requests: 0, agentRequests: 0, agentCount: 0, cost: .zero, reportedCostUSD: nil, models: [],
                    status: SessionStatus(state, .inferred))
     }
@@ -96,12 +92,43 @@ final class RangeAndFilterTests: XCTestCase {
         f.search = "alpha"
         f.projectIDs = [3]
         f.models = ["claude-opus-5-5"]
-        f.applications = ["cli"]
         XCTAssertTrue(f.isFiltering)
         let q = f.usageFilter
         XCTAssertEqual(q.search, "alpha")
         XCTAssertEqual(q.projectIDs, [3])
         XCTAssertEqual(q.models, ["claude-opus-5-5"])
-        XCTAssertEqual(q.applications, ["cli"])
+    }
+
+    func testScopeMapsToTheQueryAndSummarizesItself() {
+        var scope = DashboardScope()
+        XCTAssertFalse(scope.isActive)
+        XCTAssertEqual(scope.usageFilter, UsageFilter())
+        scope.providers = [.openAI]
+        scope.surfaces = [.terminal]
+        scope.accounts = [7]
+        XCTAssertTrue(scope.isActive)
+        let q = scope.usageFilter
+        XCTAssertEqual(q.providers, [.openAI])
+        XCTAssertEqual(q.surfaces, [.terminal])
+        XCTAssertEqual(q.accounts, [7])
+        // A page's own filter keeps its period and gains the scope.
+        var page = UsageFilter(from: Date(timeIntervalSince1970: 100))
+        scope.apply(to: &page)
+        XCTAssertEqual(page.from, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(page.providers, [.openAI])
+        XCTAssertEqual(scope.summary(registry: .builtin, options: AnalyticsEngine.FilterOptions()), "OpenAI · Terminal")
+        XCTAssertEqual(DashboardScope().summary(registry: .builtin, options: AnalyticsEngine.FilterOptions()), "All providers")
+    }
+
+    func testNarrowingProvidersDropsIncompatibleChoices() {
+        var options = AnalyticsEngine.FilterOptions()
+        options.accounts = [.init(id: 1, provider: .anthropic, label: "A"), .init(id: 2, provider: .openAI, label: "B")]
+        var scope = DashboardScope()
+        scope.providers = [.openAI]
+        scope.products = [.claudeCode, .codex]
+        scope.accounts = [1, 2]
+        let cleaned = scope.normalized(registry: .builtin, options: options)
+        XCTAssertEqual(cleaned.products, [.codex])
+        XCTAssertEqual(cleaned.accounts, [2])
     }
 }

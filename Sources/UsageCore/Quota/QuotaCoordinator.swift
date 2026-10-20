@@ -1,36 +1,30 @@
 import Foundation
 
-/// Diagnostic information about how quota data is arriving.
-public struct QuotaSourceStatus: Sendable, Equatable {
-    public var bridgeDirectoryExists = false
-    public var bridgeFileCount = 0
-    public var newestBridgeObservation: Date?
-    public var bridgeInstalledInClaudeSettings = false
-    public var lastRefresh: Date?
-    public init() {}
-}
-
 /// Combines the quota sources, remembers what they report, and tells the rest of the app when a
 /// window's state changes.
 ///
-/// The only authoritative source is the documented `rate_limits` field that Claude Code passes to
-/// its status line command, collected by the bridge. No usage percentage is ever computed from token
-/// counts: when no source has reported a window, that window is shown as unavailable.
+/// Quota figures reach the database in two ways. A `QuotaFeed` supplies observations that this coordinator reads and
+/// stores (Claude Code's status line helper is one). A session-log adapter can instead emit its provider's snapshots
+/// together with the usage it reads (the OpenAI adapter does). Either way the state shown to the user is evaluated
+/// from the stored snapshots, so every provider is handled by the same code.
+///
+/// No usage percentage is ever computed from token counts: when no source has reported a window, that
+/// window is shown as unavailable.
 ///
 /// The coordinator does no polling of its own for new data. It reacts to file events from the
-/// bridge directory, and sleeps until the next moment at which a state could change by itself (a
-/// window reset or a reading going stale). A slow safety-net refresh, configurable within safe
-/// limits, covers a missed file event.
+/// bridge directory and to `dataDidChange()`, and it sleeps until the next moment at which a state could
+/// change by itself (a window reset or a reading going stale). A slow safety-net refresh, configurable
+/// within safe limits, covers a missed file event.
 public actor QuotaCoordinator {
     private let db: UsageDatabase
     private let settings: SettingsStore
-    private let bridgeDirectory: URL
-    private let desktopCacheURL: URL
+    private let feeds: [any QuotaFeed]
     private let freshnessPolicy: QuotaFreshnessPolicy
     private let clock: @Sendable () -> Date
 
-    private var readings: [QuotaReading] = []
-    private var lastPersisted: [String: (percent: Double, resetsAt: Date?, at: Date)] = [:]
+    private var feedObservations: [QuotaObservation] = []
+    private var feedStatuses: [TelemetrySourceID: QuotaFeedStatus] = [:]
+    private var recorded: [String: QuotaObservation] = [:]
     private var subscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var watcher: FSEventsWatcher?
     private var tasks: [Task<Void, Never>] = []
@@ -43,15 +37,12 @@ public actor QuotaCoordinator {
     /// status line render) from causing a burst of reads.
     private let minimumRefreshGap: TimeInterval = 1.0
 
-    public init(db: UsageDatabase, settings: SettingsStore,
-                bridgeDirectory: URL = QuotaPaths.bridgeDirectory,
-                desktopCacheURL: URL = QuotaPaths.desktopPlanUsageCache,
+    public init(db: UsageDatabase, settings: SettingsStore, feeds: [any QuotaFeed],
                 freshnessPolicy: QuotaFreshnessPolicy = QuotaFreshnessPolicy(),
                 clock: @escaping @Sendable () -> Date = { Date() }) {
         self.db = db
         self.settings = settings
-        self.bridgeDirectory = bridgeDirectory
-        self.desktopCacheURL = desktopCacheURL
+        self.feeds = feeds
         self.freshnessPolicy = freshnessPolicy
         self.clock = clock
     }
@@ -60,9 +51,12 @@ public actor QuotaCoordinator {
 
     public func start() {
         guard watcher == nil else { return }
-        try? FileManager.default.createDirectory(at: bridgeDirectory, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        let w = FSEventsWatcher(roots: [bridgeDirectory], latency: 0.3)
+        let roots = feeds.flatMap(\.watchRoots)
+        // The folders feeds write into are created for them, private to the user, so that watching can begin.
+        for root in roots {
+            try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+        let w = FSEventsWatcher(roots: roots, latency: 0.3)
         watcher = w
         w.start()
         tasks.append(Task { [weak self] in
@@ -93,27 +87,24 @@ public actor QuotaCoordinator {
 
     // MARK: State
 
-    /// The current state of every window that has ever been reported, plus the two standard
-    /// windows, which are always listed so that the interface can explain why they are missing.
-    public func states(now: Date? = nil) -> [QuotaWindowState] {
+    /// The state of every pool that has reported, grouped by pool.
+    ///
+    /// A pool that the registry says exists but that has never reported is listed on the unassigned
+    /// account with its standard windows marked unavailable, so that the interface can explain the gap.
+    public func pools(now: Date? = nil) -> [QuotaPoolState] {
         let now = now ?? clock()
-        let allowUnverified = settings.value.showDesktopPlanUsageHint
-        var kinds: [QuotaWindowKind] = [.fiveHour, .sevenDay]
-        if readings.contains(where: { $0.kind == .spendLimit }) { kinds.append(.spendLimit) }
-        return kinds.map { QuotaEvaluator.evaluate(kind: $0, readings: readings, now: now,
-                                                   allowUnverified: allowUnverified, policy: freshnessPolicy) }
+        let allowUnverified = settings.value.showUnverifiedQuota
+        // Readings from undocumented sources are never stored, so they are added here, and only when allowed.
+        let extra = allowUnverified ? feedObservations.filter { $0.authority == .unverified } : []
+        return QuotaStateReader.pools(db: db, now: now, allowUnverified: allowUnverified, policy: freshnessPolicy, extra: extra)
     }
 
-    public func sourceStatus(inspectSettings: Bool = true) -> QuotaSourceStatus {
-        var s = QuotaSourceStatus()
-        var isDir: ObjCBool = false
-        s.bridgeDirectoryExists = FileManager.default.fileExists(atPath: bridgeDirectory.path, isDirectory: &isDir) && isDir.boolValue
-        let bridgeReadings = readings.filter { $0.provider == StatusLineQuotaSource.providerID }
-        s.bridgeFileCount = Set(bridgeReadings.compactMap(\.origin)).count
-        s.newestBridgeObservation = bridgeReadings.map(\.observedAt).max()
-        if inspectSettings { s.bridgeInstalledInClaudeSettings = StatusLineInstaller.inspect().isInstalled }
-        s.lastRefresh = lastRefresh
-        return s
+    /// Every window of every pool, flattened.
+    public func states(now: Date? = nil) -> [QuotaWindowState] { pools(now: now).flatMap(\.windows) }
+
+    /// How each feed is delivering, for the diagnostics view.
+    public func feedStatus() -> [QuotaFeedStatus] {
+        feeds.map { feedStatuses[$0.id] ?? QuotaFeedStatus(id: $0.id, rootsExist: false, observationCount: 0, originCount: 0, newestObservation: nil, lastRead: nil) }
     }
 
     // MARK: Refresh
@@ -140,16 +131,28 @@ public actor QuotaCoordinator {
         trailingRefresh = nil
         lastRefreshAttempt = Date()
 
-        var fresh = StatusLineQuotaSource.readings(in: bridgeDirectory, now: now)
-        if settings.value.showDesktopPlanUsageHint {
-            fresh += DesktopPlanUsageSource.readings(at: desktopCacheURL)
+        var fresh: [QuotaObservation] = []
+        let enabledSources = settings.value
+        for feed in feeds where !enabledSources.disabledSources.contains(feed.id.rawValue) && (!feed.requiresOptIn || enabledSources.showUnverifiedQuota) {
+            let observations = feed.observations(now: now)
+            fresh += observations
+            feedStatuses[feed.id] = QuotaFeedStatus(
+                id: feed.id, rootsExist: feed.watchRoots.allSatisfy { FileManager.default.fileExists(atPath: $0.path) },
+                observationCount: observations.count, originCount: Set(observations.compactMap(\.originSession)).count,
+                newestObservation: observations.map(\.observedAt).max(), lastRead: now)
         }
-        let changed = fresh != readings
-        readings = fresh
+        let changed = fresh != feedObservations
+        feedObservations = fresh
         lastRefresh = now
-        persistChanges(fresh, now: now)
+        persistChanges(fresh)
         if changed || force { notify() }
         scheduleNextWake(now: now)
+    }
+
+    /// Tells the coordinator that the importer stored new data, which may include quota snapshots.
+    public func dataDidChange() {
+        notify()
+        scheduleNextWake(now: clock())
     }
 
     private func runTrailingRefresh() {
@@ -159,36 +162,27 @@ public actor QuotaCoordinator {
 
     private func notify() { for c in subscribers.values { c.yield(()) } }
 
-    /// Stores authoritative readings in the quota history. A reading is stored when its value or
-    /// window changed, or when five minutes have passed since the last stored reading of the same
-    /// kind, so that the history is detailed without growing with every status line render.
-    private func persistChanges(_ readings: [QuotaReading], now: Date) {
-        var toWrite: [QuotaReading] = []
-        // Persist the newest reading per kind and provider.
-        var newest: [String: QuotaReading] = [:]
-        for r in readings where r.authority == .authoritative {
-            let key = "\(r.provider)|\(r.kind.rawValue)"
-            if let existing = newest[key], existing.observedAt >= r.observedAt { continue }
-            newest[key] = r
-        }
-        for (key, r) in newest {
-            if let last = lastPersisted[key] {
-                let same = last.percent == r.utilizationPercent && last.resetsAt == r.resetsAt
-                if same && r.observedAt.timeIntervalSince(last.at) < 5 * 60 { continue }
-                if r.observedAt <= last.at && same { continue }
-            }
-            toWrite.append(r)
-            lastPersisted[key] = (r.utilizationPercent, r.resetsAt, r.observedAt)
+    /// Stores the authoritative readings that differ from what was stored before. The store collapses
+    /// identical values into one snapshot whose confirmation time moves forward, so the history stays small
+    /// however often the status line renders. Unverified readings are never stored.
+    private func persistChanges(_ observations: [QuotaObservation]) {
+        var toWrite: [QuotaObservation] = []
+        for o in observations where o.authority == .authoritative {
+            let key = "\(o.source.rawValue)|\(o.originSession ?? "-")|\(o.poolKey)|\(o.windowKey)"
+            if recorded[key] == o { continue }
+            recorded[key] = o
+            toWrite.append(o)
         }
         guard !toWrite.isEmpty else { return }
+        let batch = IngestWriter.coalesce(toWrite)
         _ = try? db.write { c in
-            for r in toWrite {
-                try c.run("""
-                    INSERT OR IGNORE INTO quota_snapshot(provider, window_kind, utilization_pct, resets_at, observed_at, authority, origin)
-                    VALUES(?, ?, ?, ?, ?, ?, ?)
-                    """, [.text(r.provider), .text(r.kind.rawValue), .real(r.utilizationPercent),
-                          .optional(r.resetsAt.map(Clock.ms)), .int(Clock.ms(r.observedAt)),
-                          .text(r.authority.rawValue), .optional(r.origin)])
+            let resolver = EntityResolver(c, registry: db.registry)
+            for o in batch {
+                var originID: Int64?
+                if let product = o.originProduct, let session = o.originSession {
+                    originID = try? resolver.ensureSession(product: product, externalID: session, source: o.source)
+                }
+                try QuotaStore.record(o, originSessionID: originID, resolver: resolver)
             }
         }
     }
@@ -198,7 +192,8 @@ public actor QuotaCoordinator {
     private func scheduleNextWake(now: Date) {
         timerTask?.cancel()
         var next = now.addingTimeInterval(TimeInterval(settings.value.quotaRefreshSeconds))
-        for r in readings where r.authority == .authoritative || settings.value.showDesktopPlanUsageHint {
+        for state in states(now: now) {
+            guard let r = state.reading else { continue }
             if let reset = r.resetsAt, reset > now { next = min(next, reset.addingTimeInterval(1)) }
             for threshold in [freshnessPolicy.freshWithin, freshnessPolicy.agingWithin] {
                 let t = r.observedAt.addingTimeInterval(threshold + 1)
@@ -215,17 +210,150 @@ public actor QuotaCoordinator {
 
     // MARK: History
 
-    /// Returns the authoritative utilization history for charts.
-    public func history(kind: QuotaWindowKind, since: Date) -> [QuotaReading] {
+    /// Returns the stored utilization history of one window, oldest first, for charts.
+    public func history(pool: QuotaPoolKey, windowKey: String, since: Date) -> [QuotaReading] {
+        QuotaStateReader.history(db: db, pool: pool, windowKey: windowKey, since: since)
+    }
+}
+
+/// Reads the stored quota snapshots and evaluates them.
+enum QuotaStateReader {
+    /// How many of the newest snapshots per window and authority are considered. A window's current
+    /// state never depends on older ones.
+    private static let snapshotsPerWindow = 40
+
+    private struct Row {
+        var poolID: String
+        var provider: ProviderID
+        var accountID: Int64
+        var accountLabel: String
+        var poolKey: String
+        var planType: String?
+        var windowKey: String
+        var minutes: Int?
+        var reading: QuotaReading
+    }
+
+    static func pools(db: UsageDatabase, now: Date, allowUnverified: Bool, policy: QuotaFreshnessPolicy,
+                      extra: [QuotaObservation] = []) -> [QuotaPoolState] {
+        var rows: [Row] = (try? db.read { c in
+            try c.query("""
+                SELECT p.id, p.provider_id, p.account_id, COALESCE(a.label, 'Unassigned'), p.pool_key, p.plan_type,
+                       w.window_key, w.duration_minutes,
+                       q.utilization_pct, q.resets_at, q.observed_at, q.last_confirmed_at, q.telemetry_source_id, q.authority, q.cycle_id
+                FROM (SELECT *, row_number() OVER (PARTITION BY window_id, authority ORDER BY last_confirmed_at DESC, id DESC) AS rn
+                      FROM quota_snapshot) q
+                JOIN quota_window w ON w.id = q.window_id
+                JOIN quota_pool p ON p.id = w.pool_id
+                JOIN account a ON a.id = p.account_id
+                WHERE q.rn <= \(snapshotsPerWindow)
+                """) { r in
+                Row(poolID: "\(r.int(2))/\(r.text(4))", provider: ProviderID(rawValue: r.text(1)), accountID: r.int(2), accountLabel: r.text(3),
+                    poolKey: r.text(4), planType: r.textOrNil(5), windowKey: r.text(6), minutes: r.intOrNil(7).map { Int($0) },
+                    reading: QuotaReading(utilizationPercent: r.double(8), resetsAt: r.intOrNil(9).map { Clock.date(ms: $0) },
+                                          observedAt: Clock.date(ms: r.int(11)), firstObservedAt: Clock.date(ms: r.int(10)),
+                                          source: TelemetrySourceID(rawValue: r.text(12)),
+                                          authority: QuotaAuthority(rawValue: r.text(13)) ?? .unverified, cycleID: r.int(14)))
+            }
+        }) ?? []
+
+        // Readings that are not stored are attached to the account they name.
+        for o in extra {
+            let account: (id: Int64, label: String)? = try? db.read { c in
+                try c.queryOne("SELECT id, COALESCE(label, 'Unassigned') FROM account WHERE provider_id = ? AND hash = ?",
+                               [.text(o.provider.rawValue), .text(o.account.hash ?? "")]) { ($0.int(0), $0.text(1)) }
+            } ?? nil
+            guard let account else { continue }
+            rows.append(Row(poolID: "\(account.id)/\(o.poolKey)", provider: o.provider, accountID: account.id,
+                            accountLabel: account.label, poolKey: o.poolKey, planType: o.planType, windowKey: o.windowKey,
+                            minutes: o.windowMinutes,
+                            reading: QuotaReading(utilizationPercent: o.utilizationPercent, resetsAt: o.resetsAt, observedAt: o.observedAt,
+                                                  source: o.source, authority: o.authority)))
+        }
+
+        struct WindowID: Hashable { var pool: String; var key: String }
+        var byWindow: [WindowID: [Row]] = [:]
+        var poolOrder: [String] = []
+        for row in rows {
+            byWindow[WindowID(pool: row.poolID, key: row.windowKey), default: []].append(row)
+            if !poolOrder.contains(row.poolID) { poolOrder.append(row.poolID) }
+        }
+        var windowsByPool: [String: [WindowID]] = [:]
+        for id in byWindow.keys { windowsByPool[id.pool, default: []].append(id) }
+
+        func info(_ row: Row) -> QuotaPoolInfo {
+            let definition = db.registry.pool(provider: row.provider, key: row.poolKey)
+            return QuotaPoolInfo(key: QuotaPoolKey(provider: row.provider, accountID: row.accountID, poolKey: row.poolKey),
+                                 accountLabel: row.accountLabel, name: definition?.name ?? row.poolKey, planType: row.planType,
+                                 products: definition?.products ?? [], note: definition?.note ?? "")
+        }
+
+        var out: [QuotaPoolState] = []
+        for poolID in poolOrder {
+            let ids = windowsByPool[poolID] ?? []
+            guard let sample = byWindow[ids[0]]?.first else { continue }
+            let poolInfo = info(sample)
+            var windows: [QuotaWindowState] = []
+            for id in ids {
+                let group = byWindow[id]!
+                // A window whose length was reported is displayed with that length.
+                let minutes = group.compactMap(\.minutes).first
+                windows.append(QuotaEvaluator.evaluate(pool: poolInfo, windowKey: id.key, windowMinutes: minutes,
+                                                       readings: group.map(\.reading), now: now,
+                                                       allowUnverified: allowUnverified, policy: policy))
+            }
+            // Windows with no unverified-allowed reading are dropped, since there is nothing to show for them.
+            windows = windows.filter { $0.reading != nil }
+            if windows.isEmpty { continue }
+            // A pool that has reported no window of a fixed length (only a spend limit, for example) still lists
+            // the windows that the provider is known to enforce, so that the interface can say they are missing.
+            if !windows.contains(where: { $0.windowMinutes != nil }),
+               let definition = db.registry.pool(provider: sample.provider, key: sample.poolKey) {
+                for minutes in definition.standardWindowMinutes {
+                    windows.append(QuotaWindowState(pool: poolInfo, windowKey: WindowNaming.key(minutes: minutes), windowMinutes: minutes,
+                                                    reading: nil, availability: .unavailable(.noData), freshness: nil, evaluatedAt: now))
+                }
+            }
+            windows.sort { ($0.windowMinutes ?? Int.max, $0.windowKey) < ($1.windowMinutes ?? Int.max, $1.windowKey) }
+            out.append(QuotaPoolState(pool: poolInfo, windows: windows))
+        }
+
+        // Pools that never reported are listed on the unassigned account with their standard windows.
+        let reported = Set(out.map { "\($0.pool.key.provider.rawValue)/\($0.pool.key.poolKey)" })
+        let unassigned: [ProviderID: Int64] = (try? db.read { c in
+            Dictionary(uniqueKeysWithValues: try c.query("SELECT provider_id, id FROM account WHERE hash = ''") {
+                (ProviderID(rawValue: $0.text(0)), $0.int(1))
+            })
+        }) ?? [:]
+        for definition in db.registry.pools where definition.isObservable
+            && !reported.contains("\(definition.provider.rawValue)/\(definition.key)") {
+            guard let accountID = unassigned[definition.provider] else { continue }
+            let key = QuotaPoolKey(provider: definition.provider, accountID: accountID, poolKey: definition.key)
+            let poolInfo = QuotaPoolInfo(key: key, accountLabel: "Unassigned", name: definition.name,
+                                         products: definition.products, note: definition.note)
+            let windows = definition.standardWindowMinutes.map {
+                QuotaWindowState(pool: poolInfo, windowKey: WindowNaming.key(minutes: $0), windowMinutes: $0, reading: nil,
+                                 availability: .unavailable(.noData), freshness: nil, evaluatedAt: now)
+            }
+            out.append(QuotaPoolState(pool: poolInfo, windows: windows))
+        }
+        return out.sorted { ($0.pool.key.provider.rawValue, $0.pool.name, $0.pool.accountLabel) < ($1.pool.key.provider.rawValue, $1.pool.name, $1.pool.accountLabel) }
+    }
+
+    static func history(db: UsageDatabase, pool: QuotaPoolKey, windowKey: String, since: Date) -> [QuotaReading] {
         (try? db.read { c in
             try c.query("""
-                SELECT utilization_pct, resets_at, observed_at, provider, authority, origin
-                FROM quota_snapshot WHERE window_kind = ? AND observed_at >= ? ORDER BY observed_at
-                """, [.text(kind.rawValue), .int(Clock.ms(since))]) { row in
-                QuotaReading(kind: kind, utilizationPercent: row.double(0),
-                             resetsAt: row.intOrNil(1).map { Clock.date(ms: $0) }, observedAt: Clock.date(ms: row.int(2)),
-                             provider: row.text(3), authority: QuotaAuthority(rawValue: row.text(4)) ?? .unverified,
-                             origin: row.textOrNil(5))
+                SELECT q.utilization_pct, q.resets_at, q.observed_at, q.last_confirmed_at, q.telemetry_source_id, q.authority, q.cycle_id
+                FROM quota_snapshot q
+                JOIN quota_window w ON w.id = q.window_id
+                JOIN quota_pool p ON p.id = w.pool_id
+                WHERE p.account_id = ? AND p.pool_key = ? AND w.window_key = ? AND q.last_confirmed_at >= ?
+                ORDER BY q.observed_at
+                """, [.int(pool.accountID), .text(pool.poolKey), .text(windowKey), .int(Clock.ms(since))]) { r in
+                QuotaReading(utilizationPercent: r.double(0), resetsAt: r.intOrNil(1).map { Clock.date(ms: $0) },
+                             observedAt: Clock.date(ms: r.int(3)), firstObservedAt: Clock.date(ms: r.int(2)),
+                             source: TelemetrySourceID(rawValue: r.text(4)),
+                             authority: QuotaAuthority(rawValue: r.text(5)) ?? .unverified, cycleID: r.int(6))
             }
         }) ?? []
     }

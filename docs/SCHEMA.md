@@ -7,25 +7,29 @@ The database is `~/Library/Application Support/ClaudeUsageMonitor/usage.sqlite` 
 * Every timestamp is **UTC milliseconds** (`INTEGER`). Nothing calendar-based is stored.
 * Token counts are integers; categories are never merged.
 * Money: source-reported costs in micro-USD; price rates in micro-USD per million tokens, so `tokens × rate` is an exact count of pico-USD.
-* Identities are stable and natural: `(source_id, external_id)` for sessions, `(source_id, request_key)` for requests.
+* Identities are stable and natural: `(product_id, external_id)` for sessions, `(product_id, request_key)` for requests. Two sources that describe one request share its key, so it is counted once.
 
 ## Tables
 
 | Table | Purpose | Key constraints |
 |---|---|---|
-| `usage_source` | One row per source adapter | PK `id` |
-| `project` | Project (working directory) per source | `UNIQUE(source_id, key)`; `key` is Claude Code's encoded folder name |
-| `model` | Raw model id → canonical key, family, display name | PK `id` (raw) |
-| `session` | Session metadata: project, application, working directory, client version, first and last activity, **observed** end time, Claude Code's own reported cost | `UNIQUE(source_id, external_id)`; `parent_session_id` reserved for sources that expose lineage |
-| `agent` | Sub-agents seen within a session (first/last seen) | `UNIQUE(session_id, external_id)`, cascades with the session |
-| `model_request` | **The source of truth**: one row per distinct model request with the raw token categories | `UNIQUE(source_id, request_key)`; FK to session and model; generated column `logical_input_tokens` |
-| `session_reported_model_cost` | Per-model lines of the source's own cost summary | PK `(session_id, model_raw)` |
-| `source_file` | **Durable checkpoints** per log file: device, inode, size, mtime, consumed byte offset (always a line boundary), hash of the first ≤4 KB, counters, status, last error | `UNIQUE(source_id, path)` |
-| `quota_snapshot` | Authoritative quota history | `UNIQUE(provider, window_kind, observed_at)` |
-| `price_rate` | Dated rate cards: model, effective-from, prompt-size tier, speed, five rates, origin (`builtin` or `user`) | `UNIQUE(model_key, effective_from, prompt_min, speed)` |
-| `setting` | Preferences (one JSON document) and small state values | PK `key` |
-| `alert_fired` | Alerts already delivered, for deduplication | PK `key` |
-| `ingest_issue` | Capped ring (500) of collection problems for the Diagnostics page | |
+| `provider`, `product`, `surface` | The registry, seeded from `ProviderRegistry` on every launch | PK `id` |
+| `telemetry_source`, `telemetry_source_product` | Collection mechanisms and the products each covers, with capability flags and stated limitations | PK `id` |
+| `pool_definition`, `pool_membership` | Quota pools and the products that draw on each | PK `(provider_id, pool_key)` |
+| `account` | An identity at a provider. `hash` is a one-way digest (never the raw identifier); `''` is the explicit *unassigned* account | `UNIQUE(provider_id, hash)` |
+| `project` | A project. The key is a working-directory path when known, so Claude and Codex sessions of one folder share it | `UNIQUE(key)` |
+| `model` | Raw model id → canonical key, family, display name, per provider | `UNIQUE(provider_id, raw_id)` |
+| `session` | Product, account, surface, kind (main / sub-agent / review), parent and root, working directory, client version, first and last activity, observed end, source-reported cost, compaction count | `UNIQUE(product_id, external_id)` |
+| `agent` | Sub-agents seen within a session | `UNIQUE(session_id, external_id)` |
+| `model_request` | **The source of truth**: one row per distinct request with nullable token categories, `reasoning_output_tokens`, `usage_extra`, `normalization`, `completeness` | `UNIQUE(product_id, request_key)`; generated column `logical_input_tokens` |
+| `session_reported_model_cost` | Per-model lines of a source's own cost summary | PK `(session_id, model_raw)` |
+| `source_file` | **Durable checkpoints** per file (inode, size, mtime, consumed offset in decompressed bytes for compressed files, head hash, counters, status) | `UNIQUE(source_id, path)` |
+| `quota_pool` | An allowance of one account | `UNIQUE(account_id, pool_key)` |
+| `quota_window` | A window of a pool, keyed by length | `UNIQUE(pool_id, window_key)` |
+| `quota_cycle` | One period between resets | |
+| `quota_snapshot` | A reported utilization in a cycle, with first-observed and last-confirmed times, source, originating session and authority | `UNIQUE(window_id, cycle_id, utilization_pct, authority)` |
+| `price_rate` | Dated rate cards per provider and model | `UNIQUE(provider_id, model_key, effective_from, prompt_min, speed)` |
+| `setting`, `alert_fired`, `ingest_issue` | Preferences, delivered alerts, a capped ring of collection problems | |
 
 Indexes cover the analytical paths: `model_request(requested_at)`, `(session_id, requested_at)`, `(model_id, requested_at)`, `(api_request_id)`, and the session indexes on project, activity and start.
 
@@ -46,7 +50,7 @@ Indexes cover the analytical paths: `model_request(requested_at)`, `(session_id,
 
 ## Migration strategy
 
-`PRAGMA user_version` holds the schema version. `Schema.migrations` is an ordered, **append-only** list; each migration runs in its own transaction at launch for every version above the stored one. To change the schema, append a new migration; never edit an old one. The project does not need backward compatibility, but databases created by older builds still migrate forward. Built-in prices are reinstalled automatically when the catalog's fingerprint changes, leaving user-defined rows alone.
+`PRAGMA user_version` holds the schema version. `Schema.migrations` is an ordered, **append-only** list; each migration runs in its own transaction at launch for every version above the stored one. The multi-provider redesign edited the single initial migration in place, because the application was still in development and had no data to preserve (a database from the Claude-only build must be deleted). From the first release on, a schema change is a new appended migration. Built-in prices are reinstalled automatically when the catalog's fingerprint changes, leaving user-defined rows alone.
 
 ## Retention and deletion
 

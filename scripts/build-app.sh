@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds "Claude Usage Monitor.app" into ./build.
+# Builds "AI Usage Monitor.app" into ./build.
 #
 #   scripts/build-app.sh            optimized build for this Mac's architecture
 #   scripts/build-app.sh --universal  universal binary (arm64 + x86_64)
@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="Claude Usage Monitor"
+APP_NAME="AI Usage Monitor"
 BUNDLE_ID="dev.claudeusage.monitor"
 VERSION="1.0.0"
 BUILD_DIR="build"

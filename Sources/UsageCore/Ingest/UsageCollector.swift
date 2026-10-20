@@ -12,8 +12,8 @@ public struct SourceHealth: Sendable, Identifiable, Equatable {
         case failing
     }
 
-    public var id: String { sourceID }
-    public var sourceID: String
+    public var id: String { sourceID.rawValue }
+    public var sourceID: TelemetrySourceID
     public var displayName: String
     public var coverageNote: String
     public var state: State = .ok
@@ -24,7 +24,7 @@ public struct SourceHealth: Sendable, Identifiable, Equatable {
     public var consecutiveFailures = 0
     public var nextRetryAt: Date?
 
-    public init(sourceID: String, displayName: String, coverageNote: String) {
+    public init(sourceID: TelemetrySourceID, displayName: String, coverageNote: String) {
         self.sourceID = sourceID
         self.displayName = displayName
         self.coverageNote = coverageNote
@@ -80,13 +80,13 @@ public actor UsageCollector {
     private let retry: RetryPolicy
     private let reconcileInterval: TimeInterval
     private let concurrency: Int
-    private let isSourceEnabled: @Sendable (String) -> Bool
+    private let isSourceEnabled: @Sendable (TelemetrySourceID) -> Bool
 
     private var snapshotValue = CollectorSnapshot()
-    private var healthBySource: [String: SourceHealth] = [:]
+    private var healthBySource: [TelemetrySourceID: SourceHealth] = [:]
     private var pendingPaths: [String: Date] = [:]
     private var drainScheduled = false
-    private var failedFiles: [String: (failures: Int, nextAttempt: Date)] = [:]
+    private var failedFiles: [String: (source: TelemetrySourceID, failures: Int, nextAttempt: Date)] = [:]
 
     private var work: AsyncStream<Work>.Continuation?
     private var tasks: [Task<Void, Never>] = []
@@ -98,7 +98,7 @@ public actor UsageCollector {
     public init(db: UsageDatabase, adapters: [any SourceAdapter],
                 retentionFloorMs: @escaping @Sendable () -> Int64? = { nil },
                 retry: RetryPolicy = RetryPolicy(), reconcileInterval: TimeInterval = 10 * 60,
-                concurrency: Int = 3, isSourceEnabled: @escaping @Sendable (String) -> Bool = { _ in true }) {
+                concurrency: Int = 3, isSourceEnabled: @escaping @Sendable (TelemetrySourceID) -> Bool = { _ in true }) {
         self.isSourceEnabled = isSourceEnabled
         self.db = db
         self.adapters = adapters
@@ -300,9 +300,12 @@ public actor UsageCollector {
                     let mtime = Int64(st.st_mtimespec.tv_sec) * 1000 + Int64(st.st_mtimespec.tv_nsec) / 1_000_000
                     let retryDue = failedFiles[ref.path].map { $0.nextAttempt <= now } ?? true
                     if let cp = checkpoints[ref.path] {
-                        let changed = cp.size != size || cp.mtimeMs != mtime || cp.inode != Int64(st.st_ino) || cp.status != "ok"
+                        // A file that could not be decoded stays as it is until it changes.
+                        let settled = cp.status == "ok" || cp.status == "damaged"
+                        let changed = cp.size != size || cp.mtimeMs != mtime || cp.inode != Int64(st.st_ino) || !settled
                         if changed && retryDue {
-                            plan.append((ref, adapter, max(0, size - cp.consumedOffset), Double(mtime)))
+                            let readsWholeFile = ref.isCompressed || !adapter.resumesFromCheckpoint
+                            plan.append((ref, adapter, readsWholeFile ? size : max(0, size - cp.consumedOffset), Double(mtime)))
                         }
                     } else if retryDue {
                         plan.append((ref, adapter, size, Double(mtime)))
@@ -406,45 +409,47 @@ public actor UsageCollector {
 
     // MARK: Health bookkeeping
 
-    private func markSuccess(_ sourceID: String) {
+    private func markSuccess(_ sourceID: TelemetrySourceID) {
         guard var h = healthBySource[sourceID] else { return }
         h.lastSuccessAt = Date()
         healthBySource[sourceID] = h
     }
 
-    private func recordSourceFailure(_ sourceID: String, error: any Error, filePath: String?) {
+    private func recordSourceFailure(_ sourceID: TelemetrySourceID, error: any Error, filePath: String?) {
         let message = Self.describe(error)
         if let filePath {
             let previous = failedFiles[filePath]?.failures ?? 0
             let failures = previous + 1
             var retryAfter: TimeInterval?
             if let sql = error as? SQLiteError, sql.isDiskFull { retryAfter = 5 * 60 }
-            failedFiles[filePath] = (failures, Date().addingTimeInterval(retry.delay(afterFailures: failures, retryAfter: retryAfter)))
+            failedFiles[filePath] = (sourceID, failures, Date().addingTimeInterval(retry.delay(afterFailures: failures, retryAfter: retryAfter)))
         }
         if var h = healthBySource[sourceID] {
             h.lastError = message
             h.consecutiveFailures += 1
-            h.filesFailed = failedFiles.keys.count
+            h.filesFailed = failedFiles.values.filter { $0.source == sourceID }.count
             healthBySource[sourceID] = h
         }
         _ = try? db.write { c in
             try c.run("INSERT INTO ingest_issue(source_id, path, at, severity, message) VALUES(?, ?, ?, 'error', ?)",
-                      [.text(sourceID), .optional(filePath), .int(Clock.nowMs()), .text(message)])
+                      [.text(sourceID.rawValue), .optional(filePath), .int(Clock.nowMs()), .text(message)])
             try c.run("DELETE FROM ingest_issue WHERE id NOT IN (SELECT id FROM ingest_issue ORDER BY id DESC LIMIT 500)")
         }
     }
 
     private func updateOverallStates() {
         for (id, var h) in healthBySource where h.state != .notFound {
-            h.filesFailed = failedFiles.count
-            if failedFiles.isEmpty {
+            // A failure belongs to the source that owns the file, so one source's trouble never marks another unhealthy.
+            let own = failedFiles.values.filter { $0.source == id }
+            h.filesFailed = own.count
+            if own.isEmpty {
                 h.state = .ok
                 h.consecutiveFailures = 0
                 h.nextRetryAt = nil
                 if h.lastError != nil && h.lastSuccessAt != nil { h.lastError = nil }
             } else {
                 h.state = h.consecutiveFailures >= h.filesKnown && h.filesKnown > 0 ? .failing : .degraded
-                h.nextRetryAt = failedFiles.values.map(\.nextAttempt).min()
+                h.nextRetryAt = own.map(\.nextAttempt).min()
             }
             healthBySource[id] = h
         }

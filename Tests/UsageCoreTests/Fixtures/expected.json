@@ -1,0 +1,17 @@
+{
+ "sample.jsonl.zst": {
+  "bytes": 9908,
+  "sha256": "5eb57863ac8f0b52a7a4b39454d792e9d06afaf439a7ca42313eee65925b6ed9",
+  "lines": 50
+ },
+ "multiframe.jsonl.zst": {
+  "bytes": 9504,
+  "sha256": "9a4cef1b1ce921e9e8e913fbce5953938c39cfe94d9c5849157d8e10deaadf1b",
+  "lines": 50
+ },
+ "big.jsonl.zst": {
+  "bytes": 7756732,
+  "sha256": "3bd9e5ad3f0eeb1b8406f5bf9bd74f1a594029870e085984a9a0cbe8348ac397",
+  "lines": 40000
+ }
+}

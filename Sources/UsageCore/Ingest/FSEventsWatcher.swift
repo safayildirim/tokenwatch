@@ -16,7 +16,7 @@ public enum WatchEvent: Sendable {
 /// system over a short latency window before they are delivered.
 public final class FSEventsWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
-    private let queue = DispatchQueue(label: "claude-usage.fsevents", qos: .utility)
+    private let queue = DispatchQueue(label: "usage-monitor.fsevents", qos: .utility)
     private let continuation: AsyncStream<WatchEvent>.Continuation
     public let events: AsyncStream<WatchEvent>
     private let roots: [String]

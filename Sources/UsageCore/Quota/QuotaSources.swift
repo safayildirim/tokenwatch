@@ -63,14 +63,36 @@ public struct QuotaBridgeFile: Codable, Sendable, Equatable {
     }
 }
 
+/// The quota pool that Claude Code's rate limits belong to.
+public enum ClaudeQuota {
+    public static let poolKey = "claude-subscription"
+
+    /// Translates the window names that Claude uses (`five_hour`, `seven_day`, `spend_limit`) into
+    /// window keys. A window with a fixed length is keyed by its length in minutes, like every other provider's.
+    static func window(named name: String) -> (key: String, minutes: Int?)? {
+        switch name {
+        case "five_hour": (WindowNaming.key(minutes: 300), 300)
+        case "seven_day": (WindowNaming.key(minutes: 10080), 10080)
+        case "spend_limit": ("spend_limit", nil)
+        default: nil
+        }
+    }
+
+    static func observation(window: (key: String, minutes: Int?), percent: Double, resetsAt: Date?, observedAt: Date,
+                            source: TelemetrySourceID, authority: QuotaAuthority, originSession: String?) -> QuotaObservation {
+        QuotaObservation(provider: .anthropic, account: .unassigned(.anthropic), poolKey: poolKey, windowKey: window.key,
+                         windowMinutes: window.minutes, utilizationPercent: percent, resetsAt: resetsAt, observedAt: observedAt,
+                         source: source, authority: authority,
+                         originProduct: originSession == nil ? nil : .claudeCode, originSession: originSession)
+    }
+}
+
 /// Reads quota readings from the status line bridge's files.
 public enum StatusLineQuotaSource {
-    public static let providerID = "claude-code-statusline"
-
-    public static func readings(in directory: URL, now: Date = Date()) -> [QuotaReading] {
+    public static func observations(in directory: URL, now: Date = Date()) -> [QuotaObservation] {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [] }
-        var out: [QuotaReading] = []
+        var out: [QuotaObservation] = []
         for name in names where name.hasPrefix("statusline-") && name.hasSuffix(".json") {
             let url = directory.appendingPathComponent(name)
             guard let data = fm.contents(atPath: url.path),
@@ -79,11 +101,10 @@ public enum StatusLineQuotaSource {
             // Files from long-dead sessions are cleaned up so that the folder does not grow forever.
             if now.timeIntervalSince(observed) > 14 * 86400 { try? fm.removeItem(at: url); continue }
             for (key, window) in file.rateLimits {
-                guard let kind = QuotaWindowKind(rawValue: key), window.usedPercentage.isFinite, window.usedPercentage >= 0 else { continue }
-                out.append(QuotaReading(kind: kind, utilizationPercent: window.usedPercentage,
-                                        resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) },
-                                        observedAt: observed, provider: providerID, authority: .authoritative,
-                                        origin: file.sessionId))
+                guard let mapped = ClaudeQuota.window(named: key), window.usedPercentage.isFinite, window.usedPercentage >= 0 else { continue }
+                out.append(ClaudeQuota.observation(
+                    window: mapped, percent: window.usedPercentage, resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: $0) },
+                    observedAt: observed, source: .claudeStatusLine, authority: .authoritative, originSession: file.sessionId))
             }
         }
         return out
@@ -97,9 +118,7 @@ public enum StatusLineQuotaSource {
 /// times. Readings from it are therefore marked unverified, are only shown when the user opts in,
 /// and are never used for alerts.
 public enum DesktopPlanUsageSource {
-    public static let providerID = "claude-desktop-cache"
-
-    public static func readings(at url: URL = QuotaPaths.desktopPlanUsageCache) -> [QuotaReading] {
+    public static func observations(at url: URL = QuotaPaths.desktopPlanUsageCache) -> [QuotaObservation] {
         guard let data = FileManager.default.contents(atPath: url.path),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let samples = object["samples"] as? [[String: Any]] else { return [] }
@@ -107,15 +126,42 @@ public enum DesktopPlanUsageSource {
               let t = (latest["t"] as? NSNumber)?.int64Value,
               let usage = latest["u"] as? [String: Any] else { return [] }
         let observed = Clock.date(ms: t)
-        var out: [QuotaReading] = []
-        if let fh = (usage["fh"] as? NSNumber)?.doubleValue {
-            out.append(QuotaReading(kind: .fiveHour, utilizationPercent: fh, resetsAt: nil, observedAt: observed,
-                                    provider: providerID, authority: .unverified))
-        }
-        if let sd = (usage["sd"] as? NSNumber)?.doubleValue {
-            out.append(QuotaReading(kind: .sevenDay, utilizationPercent: sd, resetsAt: nil, observedAt: observed,
-                                    provider: providerID, authority: .unverified))
+        var out: [QuotaObservation] = []
+        for (field, name) in [("fh", "five_hour"), ("sd", "seven_day")] {
+            if let value = (usage[field] as? NSNumber)?.doubleValue, value.isFinite, value >= 0, let mapped = ClaudeQuota.window(named: name) {
+                out.append(ClaudeQuota.observation(window: mapped, percent: value, resetsAt: nil, observedAt: observed,
+                                                   source: .claudeDesktopCache, authority: .unverified, originSession: nil))
+            }
         }
         return out
+    }
+}
+
+
+/// The status line helper's folder, read as a quota feed.
+public struct ClaudeStatusLineFeed: QuotaFeed {
+    public var directory: URL
+    public init(directory: URL = QuotaPaths.bridgeDirectory) { self.directory = directory }
+    public var id: TelemetrySourceID { .claudeStatusLine }
+    public var watchRoots: [URL] { [directory] }
+    public var requiresOptIn: Bool { false }
+    public func observations(now: Date) -> [QuotaObservation] { StatusLineQuotaSource.observations(in: directory, now: now) }
+}
+
+/// Claude Desktop's undocumented plan-usage cache, read as a quota feed that the user has to switch on.
+public struct ClaudeDesktopCacheFeed: QuotaFeed {
+    public var url: URL
+    public init(url: URL = QuotaPaths.desktopPlanUsageCache) { self.url = url }
+    public var id: TelemetrySourceID { .claudeDesktopCache }
+    public var watchRoots: [URL] { [] }
+    public var requiresOptIn: Bool { true }
+    public func observations(now: Date) -> [QuotaObservation] { DesktopPlanUsageSource.observations(at: url) }
+}
+
+public extension Array where Element == any QuotaFeed {
+    /// The feeds that Claude provides, in the places they normally live.
+    static func claude(bridgeDirectory: URL = QuotaPaths.bridgeDirectory,
+                       desktopCache: URL = QuotaPaths.desktopPlanUsageCache) -> [any QuotaFeed] {
+        [ClaudeStatusLineFeed(directory: bridgeDirectory), ClaudeDesktopCacheFeed(url: desktopCache)]
     }
 }

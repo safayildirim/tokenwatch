@@ -10,8 +10,8 @@ if [[ "${1:-}" == "--remove" ]]; then
     echo "Removed $LABEL"
     exit 0
 fi
-APP="/Applications/Claude Usage Monitor.app"
-[[ -d "$APP" ]] || APP="$HOME/Applications/Claude Usage Monitor.app"
+APP="/Applications/AI Usage Monitor.app"
+[[ -d "$APP" ]] || APP="$HOME/Applications/AI Usage Monitor.app"
 [[ -d "$APP" ]] || { echo "Install the app first: scripts/install.sh" >&2; exit 1; }
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<PLIST

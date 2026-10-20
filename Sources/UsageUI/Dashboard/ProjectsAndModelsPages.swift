@@ -67,11 +67,11 @@ struct ProjectsPage: View {
                 Text("Double-click a project to see its individual sessions.").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .task(id: "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(model.dataVersion)") { await load() }
+        .task(id: "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(model.dataVersion)|\(model.scopeVersion)") { await load() }
     }
 
     private func load() async {
-        let f = range.filter
+        let f = model.scoped(range.filter)
         if let r = try? await model.query({ e in (try e.projects(f), try e.series(f, granularity: .day, dimension: .project)) }) {
             rows = r.0
             trend = r.1
@@ -173,8 +173,8 @@ struct ModelsPage: View {
                 }
             }
         }
-        .task(id: "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(model.dataVersion)") {
-            let f = range.filter
+        .task(id: "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(model.dataVersion)|\(model.scopeVersion)") {
+            let f = model.scoped(range.filter)
             if let r = try? await model.query({ try $0.models(f) }) { rows = r }
         }
     }

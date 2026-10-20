@@ -9,9 +9,9 @@ func usage() -> Never {
     usage: ccu <command> [options]
 
     commands:
-      import      Import Claude Code history (incrementally; safe to repeat)
+      import      Import Claude Code and Codex history (incrementally; safe to repeat)
       totals      Print token totals
-      verify      Recount tokens from the original files and compare with the database
+      verify      Recount tokens from the original files and compare with the database (--provider claude|openai)
       cost-check  Compare estimated API-equivalent cost with the cost Claude Code recorded
       sessions    List the most recent sessions
       quota       Show quota windows and how quota data is arriving
@@ -19,8 +19,10 @@ func usage() -> Never {
       bench       Import into a fresh database and report time and memory
 
     options:
-      --db PATH     database file (default: the app's database)
-      --root PATH   Claude Code projects folder (default: ~/.claude/projects)
+      --db PATH         database file (default: the app's database)
+      --root PATH       Claude Code projects folder (default: ~/.claude/projects)
+      --codex-home PATH Codex data folder (default: $CODEX_HOME or ~/.codex)
+      --provider NAME   limit import and verify to claude or openai
 
     """.utf8))
     exit(2)
@@ -37,6 +39,16 @@ func option(_ name: String) -> String? {
 
 let dbURL = option("--db").map { URL(fileURLWithPath: $0) } ?? QuotaPaths.databaseURL
 let rootURL = option("--root").map { URL(fileURLWithPath: $0) } ?? ClaudeCodeAdapter.defaultRoot
+let codexHome = option("--codex-home").map { URL(fileURLWithPath: $0) } ?? CodexAdapter.defaultHome
+let providerFilter = option("--provider")
+
+/// The adapters selected by `--provider`, or all of them.
+func selectedAdapters() -> [any SourceAdapter] {
+    var out: [any SourceAdapter] = []
+    if providerFilter == nil || providerFilter == "claude" { out.append(ClaudeCodeAdapter(root: rootURL)) }
+    if providerFilter == nil || providerFilter == "openai" { out.append(CodexAdapter(home: codexHome)) }
+    return out
+}
 
 func formatted(_ n: Int64) -> String {
     let f = NumberFormatter()
@@ -51,18 +63,24 @@ func peakMemoryMB() -> Double {
 }
 
 func runImport(db: UsageDatabase) throws {
-    let adapter = ClaudeCodeAdapter(root: rootURL)
     let sync = FileSynchronizer(db: db)
-    let start = Date()
-    let files = try adapter.discoverFiles()
-    var bytes: Int64 = 0, lines = 0, malformed = 0, changed = 0
-    for f in files {
-        let r = try sync.sync(file: f, adapter: adapter)
-        bytes += r.bytesRead; lines += r.lines; malformed += r.malformedLines
-        if r.bytesRead > 0 { changed += 1 }
+    for adapter in selectedAdapters() {
+        let start = Date()
+        let files = try adapter.discoverFiles()
+        var bytes: Int64 = 0, lines = 0, malformed = 0, changed = 0, failed = 0
+        for f in files {
+            do {
+                let r = try sync.sync(file: f, adapter: adapter)
+                bytes += r.bytesRead; lines += r.lines; malformed += r.malformedLines
+                if r.bytesRead > 0 { changed += 1 }
+            } catch {
+                failed += 1
+                FileHandle.standardError.write(Data("warning: \(f.path): \(error)\n".utf8))
+            }
+        }
+        let dt = Date().timeIntervalSince(start)
+        print("\(adapter.sourceID.rawValue): files=\(files.count) changed=\(changed) failed=\(failed) bytes_read=\(formatted(bytes)) lines=\(formatted(Int64(lines))) malformed=\(malformed) seconds=\(String(format: "%.2f", dt)) peak_rss_mb=\(String(format: "%.1f", peakMemoryMB()))")
     }
-    let dt = Date().timeIntervalSince(start)
-    print("files=\(files.count) changed=\(changed) bytes_read=\(formatted(bytes)) lines=\(formatted(Int64(lines))) malformed=\(malformed) seconds=\(String(format: "%.2f", dt)) peak_rss_mb=\(String(format: "%.1f", peakMemoryMB()))")
 }
 
 func printTotals(db: UsageDatabase) throws {
@@ -116,20 +134,46 @@ do {
     case "verify":
         let db = try UsageDatabase.open(at: dbURL)
         try runImport(db: db)
-        let report = try SourceVerifier(db: db, adapter: ClaudeCodeAdapter(root: rootURL)).verify()
-        print("files_checked=\(report.filesChecked) sessions_checked=\(report.sessionsChecked)")
-        print("requests: source=\(formatted(Int64(report.requestsInSource))) database=\(formatted(Int64(report.requestsInDatabase)))")
-        func line(_ name: String, _ s: Int64, _ d: Int64) {
+        var consistent = true
+        func formattedLine(_ name: String, _ s: Int64, _ d: Int64) {
             print("\(name.padding(toLength: 16, withPad: " ", startingAt: 0)) source=\(formatted(s).padding(toLength: 18, withPad: " ", startingAt: 0)) database=\(formatted(d).padding(toLength: 18, withPad: " ", startingAt: 0)) \(s == d ? "OK" : "MISMATCH")")
         }
-        line("uncached_input", report.sourceTotals.uncachedInput, report.databaseTotals.uncachedInput)
-        line("output", report.sourceTotals.output, report.databaseTotals.output)
-        line("cache_read", report.sourceTotals.cacheRead, report.databaseTotals.cacheRead)
-        line("cache_creation", report.sourceTotals.cacheCreation, report.databaseTotals.cacheCreation)
-        print("naive sum of every line (the wrong way): output=\(formatted(report.naiveSumOfAllLines.output)) cache_read=\(formatted(report.naiveSumOfAllLines.cacheRead))")
-        for m in report.mismatches.prefix(10) { print("mismatch \(m.sessionID) \(m.field): database=\(m.database) source=\(m.source)") }
-        print(report.isConsistent ? "RESULT: consistent" : "RESULT: INCONSISTENT (\(report.mismatches.count) mismatches)")
-        exit(report.isConsistent ? 0 : 1)
+        if providerFilter == nil || providerFilter == "claude" {
+            print("== Anthropic (Claude Code)")
+            let report = try SourceVerifier(db: db, adapter: ClaudeCodeAdapter(root: rootURL)).verify()
+            print("files_checked=\(report.filesChecked) sessions_checked=\(report.sessionsChecked)")
+            print("requests: source=\(formatted(Int64(report.requestsInSource))) database=\(formatted(Int64(report.requestsInDatabase)))")
+            formattedLine("uncached_input", report.sourceTotals.uncachedInput, report.databaseTotals.uncachedInput)
+            formattedLine("output", report.sourceTotals.output, report.databaseTotals.output)
+            formattedLine("cache_read", report.sourceTotals.cacheRead, report.databaseTotals.cacheRead)
+            formattedLine("cache_creation", report.sourceTotals.cacheCreation, report.databaseTotals.cacheCreation)
+            print("naive sum of every line (the wrong way): output=\(formatted(report.naiveSumOfAllLines.output)) cache_read=\(formatted(report.naiveSumOfAllLines.cacheRead))")
+            for m in report.mismatches.prefix(10) { print("mismatch \(m.sessionID) \(m.field): database=\(m.database) source=\(m.source)") }
+            print(report.isConsistent ? "RESULT: consistent" : "RESULT: INCONSISTENT (\(report.mismatches.count) mismatches)")
+            consistent = consistent && report.isConsistent
+        }
+        if providerFilter == nil || providerFilter == "openai" {
+            print("== OpenAI (Codex, Codex Desktop, ChatGPT Work)")
+            let stateURL = option("--codex-state").map { URL(fileURLWithPath: $0) }
+                ?? (FileManager.default.fileExists(atPath: codexHome.appendingPathComponent("state_5.sqlite").path) ? codexHome.appendingPathComponent("state_5.sqlite") : nil)
+            let report = try CodexVerifier(db: db, adapter: CodexAdapter(home: codexHome)).verify(stateDatabase: stateURL)
+            print("files_checked=\(report.filesChecked) sessions_checked=\(report.sessionsChecked) (by usage record: \(report.recordSessions), by event: \(report.eventSessions), forks: \(report.forkSessions))")
+            formattedLine("input (+cached)", report.expected.input, report.database.input)
+            formattedLine("cached", report.expected.cached, report.database.cached)
+            formattedLine("output", report.expected.output, report.database.output)
+            formattedLine("reasoning", report.expected.reasoning, report.database.reasoning)
+            print("responses: recount=\(formatted(Int64(report.expected.responses))) database=\(formatted(Int64(report.database.responses))) (a response without an event of its own is stored as one request and counted by the recount only as growth)")
+            for m in report.mismatches.prefix(10) {
+                print("mismatch \(m.sessionID.prefix(8)) \(m.mode): expected input=\(m.expected.input) output=\(m.expected.output), database input=\(m.database.input) output=\(m.database.output)")
+            }
+            if let st = report.state {
+                print("Codex's own per-thread count (state_5.sqlite): threads=\(st.threads) equal=\(st.equal) database_higher=\(st.databaseHigher) (surplus \(formatted(st.surplusTokens)) tokens) database_lower=\(st.databaseLower)")
+                for e in st.examples { print("  \(e)") }
+            }
+            print(report.isConsistent ? "RESULT: consistent" : "RESULT: INCONSISTENT (\(report.mismatches.count) mismatches)")
+            consistent = consistent && report.isConsistent
+        }
+        exit(consistent ? 0 : 1)
 
     case "cost-check":
         let db = try UsageDatabase.open(at: dbURL)
@@ -160,26 +204,31 @@ do {
         let db = try UsageDatabase.open(at: dbURL)
         let rows = try AnalyticsEngine(db: db).sessionRows().sorted { ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast) }
         for r in rows.prefix(Int(option("--limit") ?? "15") ?? 15) {
-            print("\(r.shortID)  \(r.projectName.padding(toLength: 24, withPad: " ", startingAt: 0)) \(r.status.label.padding(toLength: 20, withPad: " ", startingAt: 0)) \((r.application ?? "-").padding(toLength: 14, withPad: " ", startingAt: 0)) requests=\(r.requests) tokens=\(formatted(r.tokens.totalProcessed)) agents=\(r.agentCount) models=\(r.models.joined(separator: ","))")
+            print("\(r.shortID)  \(r.projectName.padding(toLength: 24, withPad: " ", startingAt: 0)) \(r.status.label.padding(toLength: 20, withPad: " ", startingAt: 0)) \(r.productID.rawValue.padding(toLength: 13, withPad: " ", startingAt: 0)) \((r.surface?.rawValue ?? "-").padding(toLength: 14, withPad: " ", startingAt: 0)) requests=\(r.requests) tokens=\(formatted(r.tokens.totalProcessed)) agents=\(r.agentCount) models=\(r.models.joined(separator: ","))")
         }
 
     case "quota":
         let db = try UsageDatabase.open(at: dbURL)
-        let coordinator = QuotaCoordinator(db: db, settings: SettingsStore(db: db))
+        let coordinator = QuotaCoordinator(db: db, settings: SettingsStore(db: db), feeds: .claude())
         await coordinator.refresh(force: true)
-        for s in await coordinator.states() {
-            switch s.availability {
-            case .available:
-                let r = s.reading!
-                print("\(s.kind.displayName): \(String(format: "%.1f", r.utilizationPercent))% consumed, \(String(format: "%.1f", 100 - r.utilizationPercent))% remaining, resets \(r.resetsAt.map { "\($0)" } ?? "unknown"), \(s.freshness?.rawValue ?? "?"), source \(r.provider)")
-            case .windowElapsed(let at):
-                print("\(s.kind.displayName): window reset at \(at); new utilization unknown until a source reports it")
-            case .unavailable:
-                print("\(s.kind.displayName): Unavailable (no source has reported this window)")
+        for pool in await coordinator.pools() {
+            print("\(pool.pool.name) [\(pool.pool.accountLabel)\(pool.pool.planType.map { ", plan \($0)" } ?? "")]")
+            for s in pool.windows {
+                switch s.availability {
+                case .available:
+                    let r = s.reading!
+                    print("  \(s.displayName): \(String(format: "%.1f", r.utilizationPercent))% consumed, \(String(format: "%.1f", 100 - r.utilizationPercent))% remaining, resets \(r.resetsAt.map { "\($0)" } ?? "unknown"), \(s.freshness?.rawValue ?? "?"), source \(r.source)")
+                case .windowElapsed(let at):
+                    print("  \(s.displayName): window reset at \(at); new utilization unknown until a source reports it")
+                case .unavailable:
+                    print("  \(s.displayName): Unavailable (no source has reported this window)")
+                }
             }
         }
-        let status = await coordinator.sourceStatus()
-        print("status line bridge installed in Claude Code settings: \(status.bridgeInstalledInClaudeSettings), session files: \(status.bridgeFileCount)")
+        for feed in await coordinator.feedStatus() {
+            print("feed \(feed.id.rawValue): folder exists=\(feed.rootsExist) observations=\(feed.observationCount) sources=\(feed.originCount)")
+        }
+        print("status line helper installed in Claude Code settings: \(StatusLineInstaller.inspect().isInstalled)")
 
     case "export":
         guard let kindName = option("--kind"), let kind = ExportKind(rawValue: kindName),

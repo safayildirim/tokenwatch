@@ -13,7 +13,7 @@ import Darwin
 public actor SessionRegistryMonitor {
     private let directory: URL
     private let db: UsageDatabase?
-    private let sourceID: String
+    public nonisolated let product: ProductID
     private var table: [String: LiveProcess] = [:]
     private var subscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var watcher: FSEventsWatcher?
@@ -21,10 +21,10 @@ public actor SessionRegistryMonitor {
     private var livenessTask: Task<Void, Never>?
 
     public init(directory: URL = QuotaPaths.claudeHome.appendingPathComponent("sessions"),
-                db: UsageDatabase?, sourceID: String = ClaudeCodeAdapter.id) {
+                db: UsageDatabase?, product: ProductID = .claudeCode) {
         self.directory = directory
         self.db = db
-        self.sourceID = sourceID
+        self.product = product
     }
 
     /// Returns the live processes keyed by session id.
@@ -102,15 +102,15 @@ public actor SessionRegistryMonitor {
         let resumed = Set(current.keys).subtracting(previous.keys)
         guard !ended.isEmpty || !resumed.isEmpty else { return }
         let now = Clock.nowMs()
-        let sourceID = self.sourceID
+        let product = self.product.rawValue
         _ = try? db.write { c in
             for id in ended {
-                try c.run("UPDATE session SET observed_ended_at = ? WHERE source_id = ? AND external_id = ?",
-                          [.int(now), .text(sourceID), .text(id)])
+                try c.run("UPDATE session SET observed_ended_at = ? WHERE product_id = ? AND external_id = ?",
+                          [.int(now), .text(product), .text(id)])
             }
             for id in resumed {
-                try c.run("UPDATE session SET observed_ended_at = NULL WHERE source_id = ? AND external_id = ?",
-                          [.text(sourceID), .text(id)])
+                try c.run("UPDATE session SET observed_ended_at = NULL WHERE product_id = ? AND external_id = ?",
+                          [.text(product), .text(id)])
             }
         }
     }

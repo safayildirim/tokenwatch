@@ -6,13 +6,14 @@ A source adapter turns one kind of local usage record into the application's nor
 
 ```swift
 public protocol SourceAdapter: Sendable {
-    var sourceID: String { get }
+    var sourceID: TelemetrySourceID { get }
     var displayName: String { get }
     var watchRoots: [URL] { get }                          // directories to watch with FSEvents
     func discoverFiles() throws -> [SourceFileRef]         // cheap enumeration for scans and reconciliation
     func fileRef(forPath path: String) -> SourceFileRef?   // classifies a path reported by FSEvents
     func makeParser(for file: SourceFileRef) -> any LineParser
     var coverageNote: String { get }                       // shown in Diagnostics: what is NOT covered
+    var resumesFromCheckpoint: Bool { get }                // default true; false = read a changed file again from its start
 }
 
 public protocol LineParser: AnyObject {
@@ -25,7 +26,18 @@ The generic machinery does everything else: durable checkpoints, resuming at a l
 
 A parser must be tolerant: a malformed line increments `batch.malformedLineCount` and never prevents the following lines from being processed. A parser must produce observations whose identity is stable (`requestKey`), so that re-delivery merges instead of duplicating.
 
-Adding a source takes three steps: implement the protocol, give it a unique `sourceID`, and register it in `AppModel` / `ccu`. Add fixtures and tests in the style of `Tests/UsageCoreTests/AccountingTests.swift`.
+## Adding a provider
+
+Nothing in the shared core names a provider, so adding one touches only data and one adapter:
+
+1. **Describe it as data.** Supply a `ProviderRegistry` value (or extend `BuiltinProviders.swift`) with the provider, its products, any new surfaces, its quota pools (with the products that share each, and the standard window lengths), and its telemetry sources with their capabilities and *limitations stated plainly*. A product that leaves no local record is declared `isObservable: false`, and it will be listed as such and never given a figure.
+2. **Write an adapter.** Implement `SourceAdapter` and a `LineParser` that emits `RequestObservation` (with a `UsageMeasurement` normalized by *your* conversion, with unknown categories left nil), `SessionObservation` (with an `AccountRef` built by `AccountRef.identified`, which hashes the identifier), and, if the source reports allowance snapshots, `QuotaObservation` (pool key, window key from `WindowNaming.key(minutes:)`). Choose a request key every source describing that request agrees on.
+3. **Register it** where the app is composed (`AppModel`, `ccu`).
+4. **Prices** are data too: a rate card per provider and model (`PricingStore.upsertUserRate`). A model without a card is reported as unpriced.
+
+`Tests/UsageCoreTests/ArchitectureTests.swift` is the executable proof: `FutureProviderTests` defines an invented provider with a deliberately different token format, and runs it through the real collector, writer, analytics, pricing, export, quota and alert code using nothing but a registry value and an adapter. `ArchitectureIsolationTests` fails the build of the test suite if a provider name leaks out of the files designated for it.
+
+Quota that is not part of the session logs arrives through a `QuotaFeed` (see [QUOTA](QUOTA.md)).
 
 ## The Claude Code adapter
 
@@ -69,3 +81,8 @@ The parser is deliberately tolerant. Unknown fields are skipped; missing optiona
 | Claude Code OpenTelemetry | Not implemented. It needs a local OTLP receiver, a configuration change in the user's shell, and adds no field the transcripts lack. The `api_request` event carries `request_id`, which is stored on every request, so an OTel adapter could be added later and would merge with the transcripts instead of double counting. |
 | Claude Desktop Chat / Cowork | No local record of tokens or sessions exists to read. |
 | Anthropic Admin API | Describes API-key usage, not subscription usage. |
+
+
+## The Codex adapter
+
+Reads `~/.codex/sessions` and `archived_sessions` (or `$CODEX_HOME`), in plain and zstd-compressed form, with the checkpointing described above handled for both: a compressed or changed file is read again from its start, and its checkpoint counts decompressed bytes. The header decides the product and surface, and the file's lines supply requests, sessions (with parent and fork lineage), compaction counts and quota snapshots. Full details: [OPENAI-CODEX](OPENAI-CODEX.md).

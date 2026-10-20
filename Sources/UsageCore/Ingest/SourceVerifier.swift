@@ -47,7 +47,7 @@ public struct SourceVerifier: Sendable {
         let files = try adapter.discoverFiles()
         let offsets: [String: Int64] = try db.read { c in
             Dictionary(try c.query("SELECT path, consumed_offset FROM source_file WHERE source_id = ?",
-                                   [.text(adapter.sourceID)]) { ($0.text(0), $0.int(1)) }, uniquingKeysWith: { a, _ in a })
+                                   [.text(adapter.sourceID.rawValue)]) { ($0.text(0), $0.int(1)) }, uniquingKeysWith: { a, _ in a })
         }
         // The best (largest output) observation per message id across all files.
         var best: [String: Obs] = [:]
@@ -105,9 +105,11 @@ public struct SourceVerifier: Sendable {
         let perSessionDB: [String: TokenCounts] = try db.read { c in
             var out: [String: TokenCounts] = [:]
             let rows = try c.query("""
-                SELECT s.external_id, sum(r.input_tokens), sum(r.output_tokens), sum(r.cache_read_tokens), sum(r.cache_creation_tokens), count(*)
-                FROM model_request r JOIN session s ON s.id = r.session_id GROUP BY s.id
-                """) { row in
+                SELECT s.external_id, sum(COALESCE(r.uncached_input_tokens, 0)), sum(r.output_tokens),
+                       sum(COALESCE(r.cache_read_tokens, 0)), sum(COALESCE(r.cache_creation_tokens, 0)), count(*)
+                FROM model_request r JOIN session s ON s.id = r.session_id
+                WHERE r.product_id = ? GROUP BY s.id
+                """, [.text(ProductID.claudeCode.rawValue)]) { row in
                 (row.text(0), TokenCounts(uncachedInput: row.int(1), output: row.int(2), cacheRead: row.int(3), cacheCreation: row.int(4)), Int(row.int(5)))
             }
             for (id, t, n) in rows { out[id] = t; report.requestsInDatabase += n }

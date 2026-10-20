@@ -51,10 +51,11 @@ struct OverviewPage: View {
     @State private var daily: [SeriesPoint] = []
     @State private var topModels: [ModelUsageRow] = []
     @State private var topProjects: [ProjectUsageRow] = []
+    @State private var byProvider: [ProviderUsageRow] = []
     @State private var loadError: String?
 
     var body: some View {
-        let o = model.overview
+        let o = model.scopedOverview
         PageScroll {
             if model.menuBarIconHidden { hiddenIconNotice }
             if let banner = importBanner { banner }
@@ -71,9 +72,16 @@ struct OverviewPage: View {
                             detail: "new · \(Fmt.tokens(o.thisMonth.tokens.totalProcessed)) processed")
                     KPITile(title: "Active sessions", value: "\(o.activeSessions)",
                             detail: "\(o.totalSessions) sessions in total")
-                    KPITile(title: "Cache hit ratio", value: Fmt.ratio(o.thisMonth.tokens.cacheHitRatio),
-                            detail: "this month · cache read ÷ all input",
+                    KPITile(title: "Cache hit ratio", value: o.thisMonth.coverage.cacheReadKnown ? Fmt.ratio(o.thisMonth.tokens.cacheHitRatio) : "—",
+                            detail: o.thisMonth.coverage.missingCacheRead > 0
+                                ? "this month · \(o.thisMonth.coverage.requests - o.thisMonth.coverage.missingCacheRead) of \(o.thisMonth.coverage.requests) requests report it"
+                                : "this month · cache read ÷ all input",
                             help: "Cache-read tokens divided by logical input (uncached + cache read + cache write).")
+                    if o.thisMonth.coverage.reasoningKnown {
+                        KPITile(title: "Reasoning tokens", value: Fmt.tokens(o.thisMonth.tokens.reasoningOutput),
+                                detail: "this month · part of the \(Fmt.tokens(o.thisMonth.tokens.output)) output",
+                                help: "Reasoning tokens are a part of output tokens and are never added to them. Only some providers report them.")
+                    }
                     if model.settings.showEstimatedCost {
                         KPITile(title: "API-equivalent cost", value: Fmt.cost(o.thisMonth.cost),
                                 detail: "this month · \(Fmt.cost(o.today.cost)) today",
@@ -81,9 +89,29 @@ struct OverviewPage: View {
                     }
                 }
 
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(model.quotaStates.filter { $0.kind != .spendLimit || $0.reading != nil }) { s in
-                        Card { QuotaMeter(state: s, onSetup: { model.selection = .quota }) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 12, alignment: .top)], spacing: 12) {
+                    ForEach(visiblePools) { pool in
+                        Card {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ProviderChip(provider: pool.pool.key.provider)
+                                QuotaPoolCard(pool: pool, onSetup: { model.selection = .quota })
+                            }
+                        }
+                    }
+                }
+
+                if byProvider.count > 1 || (byProvider.count == 1 && !model.scope.isActive) {
+                    Card("By provider this month", subtitle: "Shown side by side, not added up: providers count tokens in their own ways.") {
+                        ForEach(byProvider) { row in
+                            HStack {
+                                ProviderChip(provider: row.provider)
+                                Spacer()
+                                Text("\(Fmt.tokens(row.tokens.freshTokens)) new").monospacedDigit()
+                                Text("\(Fmt.tokens(row.tokens.totalProcessed)) processed").monospacedDigit().foregroundStyle(.secondary)
+                                Text("\(row.requests) requests").monospacedDigit().foregroundStyle(.secondary)
+                                if model.settings.showEstimatedCost { Text(Fmt.cost(row.cost)).monospacedDigit().foregroundStyle(.secondary).frame(minWidth: 70, alignment: .trailing) }
+                            }.font(.callout)
+                        }
                     }
                 }
 
@@ -140,11 +168,18 @@ struct OverviewPage: View {
                     }
                 }
 
-                Text("Token counts come from local Claude Code transcripts. They do not include usage from claude.ai chat, Cowork or other devices, so they can be lower than your account's real consumption.")
+                Text("Token counts come from the local files of the tools listed under Providers. They do not include chat apps or other devices, which leave no record on this Mac, so they can be lower than your accounts' real consumption.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .task(id: model.dataVersion) { await load() }
+        .task(id: "\(model.dataVersion)|\(model.scopeVersion)") { await load() }
+    }
+
+    /// Pools with a figure, plus the pools of providers that are installed but have not reported yet.
+    private var visiblePools: [QuotaPoolState] {
+        model.scopedPools.filter { pool in
+            pool.windows.contains { $0.reading != nil } || model.collectionState(of: pool.pool.key.provider).map { $0 != .notFound } ?? false
+        }
     }
 
     private var hiddenIconNotice: some View {
@@ -163,7 +198,7 @@ struct OverviewPage: View {
             if snap.isSyncing, let p = snap.progress, snap.isInitialImport {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Importing existing Claude history").font(.headline)
+                        Text("Importing existing history").font(.headline)
                         ProgressView(value: p)
                         Text("\(Int(p * 100))% · \(Fmt.tokens(snap.bytesDone))B of \(Fmt.tokens(snap.bytesTotal))B read. Numbers below are partial until this finishes.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -178,14 +213,18 @@ struct OverviewPage: View {
         let monthStart = Calendar.current.dateInterval(of: .month, for: now)?.start ?? now
         let from = Calendar.current.date(byAdding: .day, value: -13, to: Calendar.current.startOfDay(for: now))!
         do {
+            let dayFilter = model.scoped(UsageFilter(from: from))
+            let monthFilter = model.scoped(UsageFilter(from: monthStart))
             let result = try await model.query { engine in
-                (try engine.series(UsageFilter(from: from), granularity: .day),
-                 try engine.models(UsageFilter(from: monthStart)),
-                 try engine.projects(UsageFilter(from: monthStart)))
+                (try engine.series(dayFilter, granularity: .day),
+                 try engine.models(monthFilter),
+                 try engine.projects(monthFilter),
+                 try engine.providers(monthFilter))
             }
             daily = result.0
             topModels = result.1
             topProjects = result.2
+            byProvider = result.3
         } catch { loadError = "\(error)" }
     }
 }

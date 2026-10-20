@@ -56,7 +56,7 @@ struct TrendsPage: View {
         return granularity
     }
 
-    private var reloadKey: String { "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(effectiveGranularity.rawValue)|\(model.dataVersion)" }
+    private var reloadKey: String { "\(range.preset.rawValue)|\(range.customFrom)|\(range.customTo)|\(effectiveGranularity.rawValue)|\(model.dataVersion)|\(model.scopeVersion)" }
 
     var body: some View {
         PageScroll {
@@ -285,7 +285,7 @@ struct TrendsPage: View {
     private func load() async {
         loading = true
         defer { loading = false }
-        let filter = range.filter
+        let filter = model.scoped(range.filter)
         let g = effectiveGranularity
         let wantsModel = metric == .byModel
         let wantsProject = metric == .byProject

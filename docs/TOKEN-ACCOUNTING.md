@@ -87,3 +87,30 @@ Costs are API-equivalent estimates at published list prices, kept strictly apart
 * If a source reports its own cost (Claude Code's per-session `cost-state`), it is stored in separate columns and displayed next to, never merged with, the estimate.
 
 Validated against Claude Code's own recorded session costs on this machine (164 sessions): median per-session deviation 0.4 %, total within 7.4 %. Differences come from mid-session snapshots in Claude Code's record and from price assumptions made by Claude Code itself.
+
+
+## Canonical measurement and per-provider normalization
+
+Providers report usage differently, so each adapter converts what its source says into one canonical measurement before anything is stored. After that, no other code needs to know where a number came from.
+
+| Canonical field | Meaning |
+|---|---|
+| `uncached_input` | Input that was neither read from nor written to a prompt cache |
+| `cache_read` | Input served from a prompt cache |
+| `cache_creation` (with a 5-minute / 1-hour split where stated) | Input written to a prompt cache |
+| `output` | All generated tokens |
+| `reasoning_output` | The part of `output` spent on reasoning. **Already included in `output`**, stored as a subset and never added to it. |
+| `extras` | Provider-specific counters with no canonical column |
+| `normalization`, `completeness` | The conversion rule used, and whether the figures were taken from a per-request report, derived from totals, or known to be partial |
+
+A category that a source does not report is **null, meaning unknown**, not zero. Aggregates sum unknown as zero and also report how many requests lacked each category, so the interface shows a dash for a ratio it cannot compute instead of a misleading figure.
+
+| Provider | Conversion |
+|---|---|
+| Anthropic | `input_tokens` already excludes cached tokens, so it is `uncached_input`. Cache read and creation are reported separately. Thinking tokens are not broken out in Claude Code's log, so `reasoning_output` is unknown. |
+| OpenAI | `input_tokens` **includes** cached tokens, so `uncached_input = input − cached − cache_write`. `output_tokens` includes reasoning, which is stored as the subset. Verified on every response: `total = input + output`. |
+| Any other | An adapter supplies its own conversion (a test provider reports thinking tokens beside the answer and adds them to `output` exactly once). |
+
+`logical_input = uncached + cache_read + cache_creation` and `total_processed = logical_input + output` therefore mean the same for every provider. Tokenizers differ between providers, so totals compared across providers show volume, not equal effort or equal cost, and the dashboard shows providers side by side instead of adding them.
+
+Merging two observations of one request takes, per category, the larger value that is present, and an unknown category stays unknown unless another observation knows it. The SQL upsert implements exactly the same rule, and a randomized test asserts the two agree. See [OPENAI-CODEX](OPENAI-CODEX.md) for how Codex requests are identified.

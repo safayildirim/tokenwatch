@@ -63,7 +63,7 @@ The app does it from Settings → Quota (or the Quota page) after an explicit co
 Manual setup, if you prefer: add this to `~/.claude/settings.json`:
 
 ```json
-"statusLine": { "type": "command", "command": "/Applications/Claude Usage Monitor.app/Contents/MacOS/ccu-statusline" }
+"statusLine": { "type": "command", "command": "/Applications/AI Usage Monitor.app/Contents/MacOS/ccu-statusline" }
 ```
 
 Settings in a project's `.claude/settings.json` or `settings.local.json` override the user file. A project that defines its own status line needs the same helper there.
@@ -90,3 +90,27 @@ Notifications are optional and off by default. They use only authoritative, non-
 * Reset notifications fire once, only after the window had passed 50 %.
 * A stale-data alert fires once per stale episode, only while Claude Code is demonstrably in use.
 * A collection-failure alert fires once per distinct persistent failure and re-arms after recovery.
+
+
+## Multi-provider quota model
+
+Quota is stored and evaluated the same way for every provider.
+
+| Level | Meaning |
+|---|---|
+| Pool | An allowance of one account. Products that share an allowance share a pool (Claude Code and Claude chat; Codex and ChatGPT Work). Two accounts never share one, and the explicit *unassigned* account is its own pool. |
+| Window | One limit inside a pool, identified by its length (`300m`, `10080m`) or, when it has no fixed length, by a name (`spend_limit`). Claude's `five_hour` and `seven_day` become `300m` and `10080m`, which is what makes a Claude window and a Codex window the same vocabulary. |
+| Cycle | The period between two resets. Reports of one cycle disagree on the reset time by seconds, so a report joins the cycle whose reset is within five minutes. |
+| Snapshot | A reported utilization within a cycle. Identical reports extend one snapshot's *last confirmed* time instead of adding rows. |
+
+Sources reach the store in two ways: a **quota feed** (`QuotaFeed`) that the coordinator reads and watches (Claude's status line helper; Claude Desktop's undocumented cache, which is opt-in, unverified and never stored), or an adapter that emits snapshots together with the usage it reads (Codex). The state shown to the user is always evaluated from the stored snapshots:
+
+* the reading that was confirmed most recently wins, so out-of-order delivery cannot replace a newer one;
+* a reading whose window is still open beats one whose window has closed;
+* freshness is measured from the last confirmation (fresh 10 minutes, ageing 1 hour, then stale);
+* after a reset the window is *elapsed* and shown as unknown, never as zero;
+* a pool the registry knows but that has never reported is listed with its standard windows unavailable, to explain the gap. A pool that is explicitly not observable (ChatGPT Chat) never gets a figure.
+
+Alerts are identified by **account, pool, window and cycle**, and use the same windows: a threshold is announced once per cycle, and a reset is announced once. Thresholds are configured for windows of a day or less and for longer ones.
+
+The menu bar offers *highest utilization*, which compares the displayable windows of all pools and shows the largest. Percentages of different pools are never added.

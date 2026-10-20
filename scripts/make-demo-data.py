@@ -4,7 +4,7 @@
     scripts/make-demo-data.py /tmp/demo-claude            # writes /tmp/demo-claude/projects/...
     CLAUDE_USAGE_MONITOR_CLAUDE_DIR=/tmp/demo-claude \
     CLAUDE_USAGE_MONITOR_DATA_DIR=/tmp/demo-data \
-    "/Applications/Claude Usage Monitor.app/Contents/MacOS/ClaudeUsageMonitor"
+    "/Applications/AI Usage Monitor.app/Contents/MacOS/ClaudeUsageMonitor"
 
 The records use the same shape as real transcripts but contain no conversation text, so a demo never
 involves anyone's real data.

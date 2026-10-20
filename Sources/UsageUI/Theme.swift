@@ -89,7 +89,18 @@ public final class ChartColors {
             slots[key] = slot
             UserDefaults.standard.set(slots, forKey: defaultsKey)
         }
-        return slot < Palette.series.count ? Palette.series[slot] : Palette.other
+        return slot < Palette.series.count ? Palette.series[slot] : Self.extended(slot)
+    }
+
+    /// A color for the slots beyond the palette. Each gets its own hue, spaced by the golden angle so that neighbours
+    /// stay apart however many there are, with the lightness stepped separately for light and dark surfaces. Falling
+    /// back to one grey would make every entity past the eighth look the same.
+    static func extended(_ slot: Int) -> Color {
+        let hue = (0.07 + Double(slot - Palette.series.count) * 0.381966).truncatingRemainder(dividingBy: 1)
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            return NSColor(hue: hue, saturation: 0.62, brightness: dark ? 0.86 : 0.74, alpha: 1)
+        })
     }
 
     private func namespaceOf(_ key: String) -> String {

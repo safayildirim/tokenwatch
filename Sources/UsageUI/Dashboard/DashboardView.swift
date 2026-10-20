@@ -26,11 +26,18 @@ public struct DashboardView: View {
                 case .sessions: SessionsPage()
                 case .projects: ProjectsPage()
                 case .models: ModelsPage()
+                case .cost: CostPage()
                 case .quota: QuotaPage()
+                case .providers: ProvidersPage()
                 case .diagnostics: DiagnosticsPage()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if model.selection.followsScope && model.openSessionID == nil {
+                    VStack(spacing: 0) { ScopeBar(); Divider() }.background(.bar)
+                }
+            }
             .navigationTitle(model.selection.title)
         }
         .frame(minWidth: 980, minHeight: 640)
@@ -85,9 +92,9 @@ struct NoDataNotice: View {
     @Environment(AppModel.self) private var model
     var body: some View {
         let snap = model.collectorSnapshot
-        if snap.sources.first?.state == .notFound {
-            EmptyState(symbol: "questionmark.folder", title: "Claude Code was not found",
-                       message: "There is no ~/.claude/projects folder yet. Usage appears here automatically once you use Claude Code in a terminal, in VS Code, or in the Desktop app.")
+        if !snap.sources.isEmpty, snap.sources.allSatisfy({ $0.state == .notFound }) {
+            EmptyState(symbol: "questionmark.folder", title: "No supported tool was found",
+                       message: "None of the data folders exist yet (" + snap.sources.map(\.displayName).joined(separator: "; ") + "). Usage appears here automatically once you use one of them.")
         } else if snap.isSyncing {
             EmptyState(symbol: "arrow.down.circle", title: "Importing your history",
                        message: "Existing sessions are being read. This page fills in as the import progresses.")

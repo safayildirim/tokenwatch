@@ -59,21 +59,28 @@ final class RenderTests: XCTestCase {
 
     func testEveryQuotaStateRendersDistinctly() async throws {
         let now = Date()
+        let pool = QuotaPoolInfo(key: QuotaPoolKey(provider: .anthropic, accountID: 1, poolKey: "claude-subscription"),
+                                 accountLabel: "Unassigned", name: "Claude subscription")
         func reading(_ pct: Double, resets: TimeInterval?, ago: TimeInterval, authority: QuotaAuthority = .authoritative) -> QuotaReading {
-            QuotaReading(kind: .fiveHour, utilizationPercent: pct, resetsAt: resets.map { now.addingTimeInterval($0) },
-                         observedAt: now.addingTimeInterval(-ago), provider: StatusLineQuotaSource.providerID, authority: authority)
+            QuotaReading(utilizationPercent: pct, resetsAt: resets.map { now.addingTimeInterval($0) },
+                         observedAt: now.addingTimeInterval(-ago), source: .claudeStatusLine, authority: authority)
+        }
+        func evaluate(_ readings: [QuotaReading], unverified: Bool = false) -> QuotaWindowState {
+            QuotaEvaluator.evaluate(pool: pool, windowKey: "300m", windowMinutes: 300, readings: readings, now: now, allowUnverified: unverified)
         }
         let states: [(String, QuotaWindowState)] = [
-            ("low", QuotaEvaluator.evaluate(kind: .fiveHour, readings: [reading(20, resets: 7200, ago: 30)], now: now, allowUnverified: false)),
-            ("high", QuotaEvaluator.evaluate(kind: .fiveHour, readings: [reading(93, resets: 1800, ago: 30)], now: now, allowUnverified: false)),
-            ("stale", QuotaEvaluator.evaluate(kind: .fiveHour, readings: [reading(63, resets: 7200, ago: 4 * 3600)], now: now, allowUnverified: false)),
-            ("elapsed", QuotaEvaluator.evaluate(kind: .fiveHour, readings: [reading(80, resets: -600, ago: 3600)], now: now, allowUnverified: false)),
-            ("unavailable", QuotaEvaluator.evaluate(kind: .fiveHour, readings: [], now: now, allowUnverified: false)),
-            ("unverified", QuotaEvaluator.evaluate(kind: .fiveHour, readings: [reading(40, resets: nil, ago: 30, authority: .unverified)], now: now, allowUnverified: true)),
+            ("low", evaluate([reading(20, resets: 7200, ago: 30)])),
+            ("high", evaluate([reading(93, resets: 1800, ago: 30)])),
+            ("stale", evaluate([reading(63, resets: 7200, ago: 4 * 3600)])),
+            ("elapsed", evaluate([reading(80, resets: -600, ago: 3600)])),
+            ("unavailable", evaluate([])),
+            ("unverified", evaluate([reading(40, resets: nil, ago: 30, authority: .unverified)], unverified: true)),
         ]
+        let env = try UIEnv()
+        defer { try? FileManager.default.removeItem(at: env.root) }
         var digests: [String: String] = [:]
         for (name, state) in states {
-            let rep = try await renderOrFail(QuotaMeter(state: state, onSetup: {}).padding().frame(width: 400).background(Color.white), size: CGSize(width: 400, height: 130))
+            let rep = try await renderOrFail(QuotaMeter(state: state, onSetup: {}).environment(env.model).padding().frame(width: 400).background(Color.white), size: CGSize(width: 400, height: 130))
             XCTAssertGreaterThan(inkRatio(rep), 0.02, "\(name) should draw something")
             digests[name] = digest(rep)
         }
@@ -95,9 +102,11 @@ final class RenderTests: XCTestCase {
         let now = Clock.nowMs()
         try env.writeSession("S1", cwd: "/Users/test/alpha", lines: 40, at: now - 3 * 3_600_000)
         try env.writeSession("S2", cwd: "/Users/test/beta", lines: 25, at: now - 2 * 86_400_000, model: "claude-sonnet-5-5")
+        try env.writeCodexSession("01a00000-0000-7000-8000-0000000000d1", originator: "codex_work_desktop", lines: 12, at: now - 5 * 3_600_000)
+        try env.writeCodexSession("01a00000-0000-7000-8000-0000000000d2", account: nil, lines: 6, at: now - 26 * 3_600_000)
         try env.writeQuota(five: 63, week: 81)
         await env.model.start()
-        await env.waitUntil { env.model.overview.allTime.requests == 65 && env.model.quotaState(.fiveHour)?.utilizationPercent == 63 }
+        await env.waitUntil { env.model.overview.allTime.requests == 83 && env.model.quotaState("300m")?.utilizationPercent == 63 && env.model.quotaState("300m", .openAI) != nil }
         return env
     }
 

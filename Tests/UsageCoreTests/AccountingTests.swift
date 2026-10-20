@@ -32,16 +32,18 @@ final class TokenMathTests: XCTestCase {
 final class ObservationMergeTests: XCTestCase {
     private func obs(output: Int, input: Int = 2, cacheRead: Int = 500, cacheCreation: Int = 100, at: Int64 = t0,
                      agent: String? = nil, model: String = "claude-opus-5-5", stop: String? = nil) -> RequestObservation {
-        RequestObservation(sourceID: "s", requestKey: "msg_1", apiRequestID: "req_1", sessionExternalID: "S",
-                           agentExternalID: agent, modelID: model, requestedAtMs: at, uncachedInput: Int64(input),
-                           output: Int64(output), cacheRead: Int64(cacheRead), cacheCreation: Int64(cacheCreation),
-                           cacheCreation5m: 0, cacheCreation1h: Int64(cacheCreation), stopReason: stop)
+        RequestObservation(product: .claudeCode, source: .claudeTranscripts, requestKey: "msg_1", apiRequestID: "req_1",
+                           sessionExternalID: "S", agentExternalID: agent, model: model, requestedAtMs: at,
+                           usage: UsageNormalizer.anthropic(inputTokens: Int64(input), outputTokens: Int64(output),
+                                                            cacheRead: Int64(cacheRead), cacheCreation: Int64(cacheCreation),
+                                                            cacheCreation5m: 0, cacheCreation1h: Int64(cacheCreation), thinkingTokens: nil),
+                           stopReason: stop)
     }
 
     func testStreamingSnapshotsTakeTheFinalOutput() {
         let result = [obs(output: 8), obs(output: 8), obs(output: 649, stop: "tool_use")].reduce(nil as RequestObservation?) { $0?.merged(with: $1) ?? $1 }!
-        XCTAssertEqual(result.output, 649)
-        XCTAssertEqual(result.cacheRead, 500)
+        XCTAssertEqual(result.usage.output, 649)
+        XCTAssertEqual(result.usage.cacheRead, 500)
         XCTAssertEqual(result.stopReason, "tool_use")
     }
 
@@ -89,7 +91,7 @@ final class ObservationMergeTests: XCTestCase {
         var batch = NormalizedBatch()
         for o in [8, 8, 649] { batch.add(obs(output: o)) }
         XCTAssertEqual(batch.requests.count, 1)
-        XCTAssertEqual(batch.requests.values.first?.output, 649)
+        XCTAssertEqual(batch.requests.values.first?.usage.output, 649)
     }
 }
 
@@ -199,13 +201,15 @@ final class IngestAccountingTests: XCTestCase {
         // Two sources reporting one request share a request key, so the second observation merges into the first.
         let env = try TestEnv()
         var batch = NormalizedBatch()
-        let a = RequestObservation(sourceID: "claude-code", requestKey: "msg_x", apiRequestID: "req_x", sessionExternalID: "S",
-                                   modelID: "claude-opus-5-5", requestedAtMs: t0, uncachedInput: 2, output: 50, cacheRead: 10, cacheCreation: 5)
+        let a = RequestObservation(product: .claudeCode, source: .claudeTranscripts, requestKey: "msg_x", apiRequestID: "req_x",
+                                   sessionExternalID: "S", model: "claude-opus-5-5", requestedAtMs: t0,
+                                   usage: UsageNormalizer.anthropic(inputTokens: 2, outputTokens: 50, cacheRead: 10, cacheCreation: 5,
+                                                                    cacheCreation5m: nil, cacheCreation1h: nil, thinkingTokens: nil))
         var b = a
-        b.output = 60
+        b.usage.output = 60
         batch.add(a)
-        batch.add(SessionObservation(sourceID: "claude-code", externalID: "S", projectKey: "-p", cwd: nil, application: nil,
-                                     clientVersion: nil, firstSeenMs: t0, lastSeenMs: t0, versionSeenMs: 0))
+        batch.add(SessionObservation(product: .claudeCode, source: .claudeTranscripts, externalID: "S", projectKey: "claude-folder:-p",
+                                     account: .unassigned(.anthropic), firstSeenMs: t0, lastSeenMs: t0))
         _ = try IngestWriter.apply(batch: batch, checkpoint: nil, retentionFloorMs: nil, db: env.db)
         var second = NormalizedBatch()
         second.add(b)
@@ -267,7 +271,7 @@ final class IngestAccountingTests: XCTestCase {
         try Fixture.write([first, cut], to: f, terminate: false)
         try env.syncAll()
         XCTAssertEqual(try env.totals().requests, 1, "the half-written line must not be parsed")
-        let cp = try env.synchronizer.loadCheckpoint(sourceID: "claude-code", path: f.path)!
+        let cp = try env.synchronizer.loadCheckpoint(sourceID: .claudeTranscripts, path: f.path)!
         XCTAssertEqual(cp.consumedOffset, Int64(first.utf8.count + 1), "the checkpoint stops at the last complete line")
 
         // The rest of the line arrives later.

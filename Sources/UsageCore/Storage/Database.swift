@@ -20,6 +20,8 @@ public struct DatabaseOpenReport: Sendable {
 public final class UsageDatabase: @unchecked Sendable {
     public let url: URL
     public private(set) var openReport = DatabaseOpenReport()
+    /// The providers, products, surfaces, quota pools and telemetry sources this database was opened for.
+    public let registry: ProviderRegistry
 
     private let writer: SQLiteConnection
     private let writerLock = NSLock()
@@ -33,23 +35,23 @@ public final class UsageDatabase: @unchecked Sendable {
     ///
     /// If the previous run did not shut down cleanly, a quick integrity check runs first. A
     /// database that is damaged beyond use is moved aside and replaced with an empty one.
-    public static func open(at url: URL) throws -> UsageDatabase {
+    public static func open(at url: URL, registry: ProviderRegistry = .builtin) throws -> UsageDatabase {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         var report = DatabaseOpenReport()
         do {
-            return try attemptOpen(at: url, report: &report)
+            return try attemptOpen(at: url, registry: registry, report: &report)
         } catch let error as SQLiteError where error.isCorruption {
             let aside = try quarantine(url)
             report = DatabaseOpenReport()
             report.recoveredFromCorruption = true
             report.quarantinedTo = aside
-            return try attemptOpen(at: url, report: &report)
+            return try attemptOpen(at: url, registry: registry, report: &report)
         }
     }
 
-    private static func attemptOpen(at url: URL, report: inout DatabaseOpenReport) throws -> UsageDatabase {
-        let db = try UsageDatabase(url: url)
+    private static func attemptOpen(at url: URL, registry: ProviderRegistry, report: inout DatabaseOpenReport) throws -> UsageDatabase {
+        let db = try UsageDatabase(url: url, registry: registry)
         var working = report
         do {
             try db.configureAndMigrate(report: &working)
@@ -76,8 +78,9 @@ public final class UsageDatabase: @unchecked Sendable {
         return aside
     }
 
-    private init(url: URL) throws {
+    private init(url: URL, registry: ProviderRegistry) throws {
         self.url = url
+        self.registry = registry
         writer = try SQLiteConnection(path: url.path)
     }
 
@@ -113,6 +116,7 @@ public final class UsageDatabase: @unchecked Sendable {
             }
         }
         report.migratedTo = Schema.latestVersion
+        try writer.transaction { try RegistrySeeder.seed(registry, into: writer) }
         try PricingStore.seedIfNeeded(self)
         try writer.run("INSERT INTO setting(key, value, updated_at) VALUES('clean_shutdown', '0', ?) "
                        + "ON CONFLICT(key) DO UPDATE SET value = '0', updated_at = excluded.updated_at",
@@ -209,6 +213,7 @@ public final class UsageDatabase: @unchecked Sendable {
                           "project", "model", "source_file", "ingest_issue"] {
                 try c.run("DELETE FROM \(table)")
             }
+            // Accounts and quota history stay: they describe what providers reported, not what the logs contain.
         }
     }
 
@@ -216,10 +221,11 @@ public final class UsageDatabase: @unchecked Sendable {
     public func eraseAllData() throws {
         try write { c in
             for table in ["model_request", "session_reported_model_cost", "agent", "session",
-                          "project", "model", "source_file", "ingest_issue", "quota_snapshot",
-                          "alert_fired"] {
+                          "project", "model", "source_file", "ingest_issue", "quota_snapshot", "quota_cycle",
+                          "quota_window", "quota_pool", "alert_fired"] {
                 try c.run("DELETE FROM \(table)")
             }
+            try c.run("DELETE FROM account WHERE hash != ''")
         }
         writerLock.lock()
         _ = try? writer.query("PRAGMA wal_checkpoint(TRUNCATE)") { _ in 0 }

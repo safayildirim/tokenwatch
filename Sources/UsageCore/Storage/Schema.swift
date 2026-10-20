@@ -9,63 +9,140 @@ struct Migration {
 }
 
 enum Schema {
-    /// This is the ordered list of migrations. New schema changes are appended here and never edited, so
-    /// that a database created by an older build can always be brought forward.
+    /// The ordered list of migrations. The application is still in development, so the first migration is
+    /// edited in place instead of being followed by a second one. Once the schema is released, changes are
+    /// appended here and an earlier migration is never edited again.
     static let migrations: [Migration] = [
         Migration(version: 1, name: "initial", sql: v1)
     ]
 
     static var latestVersion: Int { migrations.last?.version ?? 0 }
 
-    /// This is version 1 of the schema.
+    /// Version 1 of the schema.
+    ///
+    /// The model separates the concepts whose semantics differ between providers.
+    ///
+    /// - A **provider** (Anthropic, OpenAI) offers **products** (Claude Code, Codex, ChatGPT Work). Products run
+    ///   on **surfaces** (a terminal, an IDE, a desktop app). **Telemetry sources** are how data is collected.
+    /// - An **account** belongs to one provider. An account with an empty hash is the explicit "unassigned"
+    ///   account, used when the telemetry does not say which account an activity belongs to.
+    /// - A **session** belongs to a product and an account. A **model request** belongs to a session and
+    ///   stores usage in the canonical categories, with unknown categories left null.
+    /// - A **quota pool** is an allowance enforced against one account. A pool has **windows**, each window
+    ///   moves through **cycles** (one per reset), and **snapshots** record what a source reported.
     ///
     /// Conventions used throughout:
     /// - Every timestamp is an integer count of milliseconds since the Unix epoch in UTC.
     ///   Calendar concepts such as "today" are always computed at query time in the user's
     ///   current time zone, never stored.
-    /// - Token counts are integers and are never reduced to a single total.
+    /// - Token counts are integers. Unknown categories are null, never zero.
     /// - Money is stored as integers: source-reported costs in micro-USD, and price rates in
     ///   micro-USD per million tokens, so that `tokens * rate` is an exact count of pico-USD.
     private static let v1 = """
-    CREATE TABLE usage_source (
+    CREATE TABLE provider (
+        id   TEXT PRIMARY KEY,
+        name TEXT NOT NULL
+    ) STRICT;
+
+    CREATE TABLE product (
+        id            TEXT PRIMARY KEY,
+        provider_id   TEXT NOT NULL REFERENCES provider(id),
+        name          TEXT NOT NULL,
+        observability TEXT NOT NULL DEFAULT ''
+    ) STRICT;
+
+    CREATE TABLE surface (
+        id     TEXT PRIMARY KEY,
+        name   TEXT NOT NULL,
+        symbol TEXT NOT NULL DEFAULT ''
+    ) STRICT;
+
+    CREATE TABLE telemetry_source (
         id           TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL
+        provider_id  TEXT NOT NULL REFERENCES provider(id),
+        kind         TEXT NOT NULL,
+        name         TEXT NOT NULL,
+        capabilities INTEGER NOT NULL DEFAULT 0,
+        limitations  TEXT NOT NULL DEFAULT ''
+    ) STRICT;
+
+    CREATE TABLE telemetry_source_product (
+        source_id  TEXT NOT NULL REFERENCES telemetry_source(id),
+        product_id TEXT NOT NULL REFERENCES product(id),
+        PRIMARY KEY (source_id, product_id)
+    ) STRICT;
+
+    CREATE TABLE pool_definition (
+        provider_id TEXT NOT NULL REFERENCES provider(id),
+        pool_key    TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        note        TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (provider_id, pool_key)
+    ) STRICT;
+
+    CREATE TABLE pool_membership (
+        provider_id TEXT NOT NULL,
+        pool_key    TEXT NOT NULL,
+        product_id  TEXT NOT NULL REFERENCES product(id),
+        PRIMARY KEY (provider_id, pool_key, product_id),
+        FOREIGN KEY (provider_id, pool_key) REFERENCES pool_definition(provider_id, pool_key)
+    ) STRICT;
+
+    CREATE TABLE account (
+        id          INTEGER PRIMARY KEY,
+        provider_id TEXT NOT NULL REFERENCES provider(id),
+        hash        TEXT NOT NULL DEFAULT '',
+        label       TEXT,
+        UNIQUE (provider_id, hash)
     ) STRICT;
 
     CREATE TABLE project (
-        id        INTEGER PRIMARY KEY,
-        source_id TEXT NOT NULL REFERENCES usage_source(id),
-        key       TEXT NOT NULL,
-        path      TEXT,
-        name      TEXT NOT NULL,
-        UNIQUE (source_id, key)
+        id   INTEGER PRIMARY KEY,
+        key  TEXT NOT NULL UNIQUE,
+        path TEXT,
+        name TEXT NOT NULL
     ) STRICT;
 
     CREATE TABLE model (
-        id           TEXT PRIMARY KEY,
+        id           INTEGER PRIMARY KEY,
+        provider_id  TEXT NOT NULL REFERENCES provider(id),
+        raw_id       TEXT NOT NULL,
         canonical    TEXT NOT NULL,
         family       TEXT NOT NULL,
-        display_name TEXT NOT NULL
+        display_name TEXT NOT NULL,
+        UNIQUE (provider_id, raw_id)
     ) STRICT;
 
     CREATE TABLE session (
-        id                INTEGER PRIMARY KEY,
-        source_id         TEXT NOT NULL REFERENCES usage_source(id),
-        external_id       TEXT NOT NULL,
-        project_id        INTEGER REFERENCES project(id),
-        parent_session_id INTEGER REFERENCES session(id),
-        application       TEXT,
-        cwd               TEXT,
-        client_version    TEXT,
-        started_at        INTEGER,
-        last_activity_at  INTEGER,
-        observed_ended_at INTEGER,
+        id                   INTEGER PRIMARY KEY,
+        product_id           TEXT NOT NULL REFERENCES product(id),
+        external_id          TEXT NOT NULL,
+        account_id           INTEGER NOT NULL REFERENCES account(id),
+        account_source       TEXT NOT NULL DEFAULT 'telemetry',
+        telemetry_source_id  TEXT NOT NULL REFERENCES telemetry_source(id),
+        project_id           INTEGER REFERENCES project(id),
+        surface_id           TEXT REFERENCES surface(id),
+        kind                 TEXT NOT NULL DEFAULT 'main',
+        parent_external_id   TEXT,
+        root_external_id     TEXT,
+        parent_session_id    INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        root_session_id      INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        cwd                  TEXT,
+        client_version       TEXT,
+        started_at           INTEGER,
+        last_activity_at     INTEGER,
+        observed_ended_at    INTEGER,
         reported_cost_micros INTEGER,
-        UNIQUE (source_id, external_id)
+        compaction_count     INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (product_id, external_id)
     ) STRICT;
-    CREATE INDEX session_project ON session(project_id);
-    CREATE INDEX session_activity ON session(last_activity_at);
-    CREATE INDEX session_started ON session(started_at);
+    CREATE INDEX idx_session_project ON session(project_id);
+    CREATE INDEX idx_session_account ON session(account_id);
+    CREATE INDEX idx_session_activity ON session(last_activity_at);
+    CREATE INDEX idx_session_started ON session(started_at);
+    CREATE INDEX idx_session_parent ON session(parent_session_id);
+    CREATE INDEX idx_session_unresolved_parent ON session(parent_external_id)
+        WHERE parent_session_id IS NULL AND parent_external_id IS NOT NULL;
 
     CREATE TABLE agent (
         id            INTEGER PRIMARY KEY,
@@ -79,33 +156,38 @@ enum Schema {
 
     CREATE TABLE model_request (
         id                       INTEGER PRIMARY KEY,
-        source_id                TEXT NOT NULL REFERENCES usage_source(id),
+        product_id               TEXT NOT NULL REFERENCES product(id),
         request_key              TEXT NOT NULL,
         api_request_id           TEXT,
         session_id               INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
         agent_key                TEXT,
-        model_id                 TEXT NOT NULL REFERENCES model(id),
+        model_id                 INTEGER NOT NULL REFERENCES model(id),
         requested_at             INTEGER NOT NULL,
-        input_tokens             INTEGER NOT NULL,
+        uncached_input_tokens    INTEGER,
         output_tokens            INTEGER NOT NULL,
-        cache_read_tokens        INTEGER NOT NULL,
-        cache_creation_tokens    INTEGER NOT NULL,
+        cache_read_tokens        INTEGER,
+        cache_creation_tokens    INTEGER,
+        reasoning_output_tokens  INTEGER,
         cache_creation_5m_tokens INTEGER,
         cache_creation_1h_tokens INTEGER,
         logical_input_tokens     INTEGER GENERATED ALWAYS AS
-            (input_tokens + cache_read_tokens + cache_creation_tokens) VIRTUAL,
+            (COALESCE(uncached_input_tokens, 0) + COALESCE(cache_read_tokens, 0) + COALESCE(cache_creation_tokens, 0)) VIRTUAL,
+        usage_extra              TEXT,
+        normalization            TEXT NOT NULL,
+        completeness             TEXT NOT NULL DEFAULT 'complete',
         speed                    TEXT,
         stop_reason              TEXT,
         source_cost_micros       INTEGER,
+        telemetry_source_id      TEXT NOT NULL REFERENCES telemetry_source(id),
         origin_file_id           INTEGER,
-        origin_offset            INTEGER,
+        origin_location          INTEGER,
         first_ingested_at        INTEGER NOT NULL,
-        UNIQUE (source_id, request_key)
+        UNIQUE (product_id, request_key)
     ) STRICT;
-    CREATE INDEX request_time ON model_request(requested_at);
-    CREATE INDEX request_session_time ON model_request(session_id, requested_at);
-    CREATE INDEX request_model_time ON model_request(model_id, requested_at);
-    CREATE INDEX request_api_id ON model_request(api_request_id) WHERE api_request_id IS NOT NULL;
+    CREATE INDEX idx_request_time ON model_request(requested_at);
+    CREATE INDEX idx_request_session_time ON model_request(session_id, requested_at);
+    CREATE INDEX idx_request_model_time ON model_request(model_id, requested_at);
+    CREATE INDEX idx_request_api_id ON model_request(api_request_id) WHERE api_request_id IS NOT NULL;
 
     CREATE TABLE session_reported_model_cost (
         session_id            INTEGER NOT NULL REFERENCES session(id) ON DELETE CASCADE,
@@ -120,7 +202,7 @@ enum Schema {
 
     CREATE TABLE source_file (
         id               INTEGER PRIMARY KEY,
-        source_id        TEXT NOT NULL REFERENCES usage_source(id),
+        source_id        TEXT NOT NULL REFERENCES telemetry_source(id),
         path             TEXT NOT NULL,
         device           INTEGER,
         inode            INTEGER,
@@ -137,21 +219,51 @@ enum Schema {
         UNIQUE (source_id, path)
     ) STRICT;
 
-    CREATE TABLE quota_snapshot (
-        id              INTEGER PRIMARY KEY,
-        provider        TEXT NOT NULL,
-        window_kind     TEXT NOT NULL,
-        utilization_pct REAL NOT NULL,
-        resets_at       INTEGER,
-        observed_at     INTEGER NOT NULL,
-        authority       TEXT NOT NULL,
-        origin          TEXT,
-        UNIQUE (provider, window_kind, observed_at)
+    CREATE TABLE quota_pool (
+        id          INTEGER PRIMARY KEY,
+        provider_id TEXT NOT NULL REFERENCES provider(id),
+        account_id  INTEGER NOT NULL REFERENCES account(id),
+        pool_key    TEXT NOT NULL,
+        plan_type   TEXT,
+        UNIQUE (account_id, pool_key)
     ) STRICT;
-    CREATE INDEX quota_time ON quota_snapshot(window_kind, observed_at);
+
+    CREATE TABLE quota_window (
+        id               INTEGER PRIMARY KEY,
+        pool_id          INTEGER NOT NULL REFERENCES quota_pool(id) ON DELETE CASCADE,
+        window_key       TEXT NOT NULL,
+        duration_minutes INTEGER,
+        UNIQUE (pool_id, window_key)
+    ) STRICT;
+
+    CREATE TABLE quota_cycle (
+        id                INTEGER PRIMARY KEY,
+        window_id         INTEGER NOT NULL REFERENCES quota_window(id) ON DELETE CASCADE,
+        resets_at         INTEGER,
+        first_observed_at INTEGER NOT NULL,
+        last_observed_at  INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX idx_cycle_window ON quota_cycle(window_id, resets_at);
+
+    CREATE TABLE quota_snapshot (
+        id                  INTEGER PRIMARY KEY,
+        window_id           INTEGER NOT NULL REFERENCES quota_window(id) ON DELETE CASCADE,
+        cycle_id            INTEGER NOT NULL REFERENCES quota_cycle(id) ON DELETE CASCADE,
+        utilization_pct     REAL NOT NULL,
+        resets_at           INTEGER,
+        observed_at         INTEGER NOT NULL,
+        last_confirmed_at   INTEGER NOT NULL,
+        telemetry_source_id TEXT NOT NULL REFERENCES telemetry_source(id),
+        origin_session_id   INTEGER REFERENCES session(id) ON DELETE SET NULL,
+        authority           TEXT NOT NULL,
+        UNIQUE (window_id, cycle_id, utilization_pct, authority)
+    ) STRICT;
+    CREATE INDEX idx_snapshot_window_time ON quota_snapshot(window_id, last_confirmed_at);
+    CREATE INDEX idx_snapshot_cycle ON quota_snapshot(cycle_id, observed_at);
 
     CREATE TABLE price_rate (
         id                         INTEGER PRIMARY KEY,
+        provider_id                TEXT NOT NULL REFERENCES provider(id),
         model_key                  TEXT NOT NULL,
         effective_from             INTEGER NOT NULL,
         prompt_min                 INTEGER NOT NULL DEFAULT 0,
@@ -164,9 +276,9 @@ enum Schema {
         cache_1h_micros_per_mtok   INTEGER NOT NULL,
         origin                     TEXT NOT NULL DEFAULT 'builtin',
         note                       TEXT,
-        UNIQUE (model_key, effective_from, prompt_min, speed)
+        UNIQUE (provider_id, model_key, effective_from, prompt_min, speed)
     ) STRICT;
-    CREATE INDEX price_lookup ON price_rate(model_key, speed, effective_from);
+    CREATE INDEX idx_price_lookup ON price_rate(provider_id, model_key, speed, effective_from);
 
     CREATE TABLE setting (
         key        TEXT PRIMARY KEY,
@@ -189,6 +301,6 @@ enum Schema {
         severity  TEXT NOT NULL,
         message   TEXT NOT NULL
     ) STRICT;
-    CREATE INDEX issue_time ON ingest_issue(at);
+    CREATE INDEX idx_issue_time ON ingest_issue(at);
     """
 }

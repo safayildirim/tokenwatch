@@ -14,8 +14,7 @@ import Foundation
 /// Only a few small fields are read from each record. Message content, tool input and tool output
 /// are skipped without being decoded, and nothing from them is stored.
 public struct ClaudeCodeAdapter: SourceAdapter {
-    public static let id = "claude-code"
-    public var sourceID: String { Self.id }
+    public var sourceID: TelemetrySourceID { .claudeTranscripts }
     public var displayName: String { "Claude Code (CLI, VS Code, Desktop Code)" }
     public let root: URL
 
@@ -75,6 +74,33 @@ public struct ClaudeCodeAdapter: SourceAdapter {
     public func makeParser(for file: SourceFileRef) -> any LineParser {
         ClaudeCodeLineParser(file: file)
     }
+
+    // MARK: Identity
+
+    /// Mirrors Claude Code's rule for turning a directory into a project folder name.
+    public static func encodeProjectKey(_ path: String) -> String {
+        String(path.unicodeScalars.map { s in
+            (s.isASCII && (s.properties.isAlphabetic || (s.value >= 0x30 && s.value <= 0x39))) ? Character(s) : "-"
+        })
+    }
+
+    /// The working directory is trusted as the project root only when it maps back to the project folder
+    /// name. Otherwise the session started in a sub-directory or elsewhere, and the folder stands in for
+    /// the project. A trusted root is a real path, so Claude and Codex sessions of one directory share a project.
+    static func projectKey(folder: String, cwd: String?) -> String {
+        if let cwd, !cwd.isEmpty, encodeProjectKey(cwd) == folder { return cwd }
+        return "claude-folder:" + folder
+    }
+
+    /// Maps the `entrypoint` field of a record to where the session ran.
+    static func surface(forEntrypoint entrypoint: String?) -> SurfaceID? {
+        guard let e = entrypoint?.lowercased(), !e.isEmpty else { return nil }
+        if e.contains("vscode") { return .vscode }
+        if e.contains("jetbrains") { return .jetbrains }
+        if e.contains("desktop") { return .claudeDesktop }
+        if e == "cli" || e.hasSuffix("-cli") || e == "sdk-cli" { return .terminal }
+        return .unknown
+    }
 }
 
 /// Parses Claude Code transcript lines.
@@ -86,7 +112,7 @@ public struct ClaudeCodeAdapter: SourceAdapter {
 /// - Every other record with a timestamp only contributes to the session's activity window.
 final class ClaudeCodeLineParser: LineParser {
     private let file: SourceFileRef
-    private let sourceID: String
+    private let sourceID: TelemetrySourceID
     private var sessions: [String: SessionObservation] = [:]
     private var agents: [String: AgentObservation] = [:]
 
@@ -105,7 +131,7 @@ final class ClaudeCodeLineParser: LineParser {
         var hasUsage = false
         var input: Int64 = 0
         var output: Int64 = 0
-        var cacheRead: Int64 = 0
+        var cacheRead: Int64?
         var cacheCreation: Int64?
         var cache5m: Int64?
         var cache1h: Int64?
@@ -174,7 +200,7 @@ final class ClaudeCodeLineParser: LineParser {
         let effectiveAgent = agentID ?? file.agentHint
 
         if type == "cost-state", let total = costTotal {
-            batch.add(CostReportObservation(sourceID: sourceID, sessionExternalID: effectiveSession,
+            batch.add(CostReportObservation(product: .claudeCode, sessionExternalID: effectiveSession,
                                             totalCostMicros: Int64((total * 1_000_000).rounded()),
                                             models: costModels))
             return
@@ -187,13 +213,14 @@ final class ClaudeCodeLineParser: LineParser {
             s.firstSeenMs = min(s.firstSeenMs, ts)
             s.lastSeenMs = max(s.lastSeenMs, ts)
             if s.cwd == nil, let r = cwdRaw { s.cwd = c.string(r) }
-            if s.application == nil { s.application = entrypoint }
+            if s.surface == nil { s.surface = ClaudeCodeAdapter.surface(forEntrypoint: entrypoint) }
             if let v = version, v != s.clientVersion, ts >= s.versionSeenMs { s.clientVersion = v; s.versionSeenMs = ts }
             sessions[effectiveSession] = s
         } else {
             sessions[effectiveSession] = SessionObservation(
-                sourceID: sourceID, externalID: effectiveSession, projectKey: file.projectKey,
-                cwd: cwdRaw.map { c.string($0) }, application: entrypoint, clientVersion: version,
+                product: .claudeCode, source: sourceID, externalID: effectiveSession, projectKey: file.projectKey,
+                cwd: cwdRaw.map { c.string($0) }, surface: ClaudeCodeAdapter.surface(forEntrypoint: entrypoint),
+                account: .unassigned(.anthropic), clientVersion: version,
                 firstSeenMs: ts, lastSeenMs: ts, versionSeenMs: version == nil ? 0 : ts)
         }
         if let a = effectiveAgent {
@@ -203,7 +230,7 @@ final class ClaudeCodeLineParser: LineParser {
                 existing.lastSeenMs = max(existing.lastSeenMs, ts)
                 agents[key] = existing
             } else {
-                agents[key] = AgentObservation(sourceID: sourceID, sessionExternalID: effectiveSession,
+                agents[key] = AgentObservation(product: .claudeCode, sessionExternalID: effectiveSession,
                                                externalID: a, firstSeenMs: ts, lastSeenMs: ts)
             }
         }
@@ -211,18 +238,25 @@ final class ClaudeCodeLineParser: LineParser {
         // Build a request observation from the assistant message when it carries usage.
         guard type == "assistant", msg.hasUsage, let model = msg.model, model != RequestObservation.syntheticModel else { return }
         let key = msg.id ?? requestID ?? "\(file.path)@\(offset)"
-        let cacheCreation = msg.cacheCreation ?? ((msg.cache5m ?? 0) + (msg.cache1h ?? 0))
+        var cacheCreation = msg.cacheCreation
+        if cacheCreation == nil, msg.cache5m != nil || msg.cache1h != nil {
+            cacheCreation = (msg.cache5m ?? 0) + (msg.cache1h ?? 0)
+        }
+        let usage = UsageNormalizer.anthropic(
+            inputTokens: msg.input, outputTokens: msg.output, cacheRead: msg.cacheRead, cacheCreation: cacheCreation,
+            cacheCreation5m: msg.cache5m, cacheCreation1h: msg.cache1h, thinkingTokens: nil)
         let obs = RequestObservation(
-            sourceID: sourceID, requestKey: key, apiRequestID: requestID,
-            sessionExternalID: effectiveSession, agentExternalID: effectiveAgent, modelID: model,
-            requestedAtMs: ts, uncachedInput: msg.input, output: msg.output, cacheRead: msg.cacheRead,
-            cacheCreation: cacheCreation, cacheCreation5m: msg.cache5m, cacheCreation1h: msg.cache1h,
-            speed: msg.speed, stopReason: msg.stopReason, originOffset: offset)
+            product: .claudeCode, source: sourceID, requestKey: key, apiRequestID: requestID,
+            sessionExternalID: effectiveSession, agentExternalID: effectiveAgent, model: model,
+            requestedAtMs: ts, usage: usage, speed: msg.speed, stopReason: msg.stopReason, originLocation: offset)
         if !obs.isEmpty { batch.add(obs) }
     }
 
     func flush(into batch: inout NormalizedBatch) {
-        for s in sessions.values { batch.add(s) }
+        for var s in sessions.values {
+            s.projectKey = ClaudeCodeAdapter.projectKey(folder: file.projectKey, cwd: s.cwd)
+            batch.add(s)
+        }
         for a in agents.values { batch.add(a) }
         sessions.removeAll(keepingCapacity: true)
         agents.removeAll(keepingCapacity: true)
@@ -316,5 +350,16 @@ final class ClaudeCodeLineParser: LineParser {
         }
         if ok { out = lines }
         return ok
+    }
+}
+
+
+extension UsageNormalizer {
+    /// Anthropic Messages API usage. `input_tokens` already excludes cached tokens.
+    public static func anthropic(inputTokens: Int64, outputTokens: Int64, cacheRead: Int64?, cacheCreation: Int64?,
+                                 cacheCreation5m: Int64?, cacheCreation1h: Int64?, thinkingTokens: Int64?) -> UsageMeasurement {
+        UsageMeasurement(uncachedInput: inputTokens, cacheRead: cacheRead, cacheCreation: cacheCreation, output: outputTokens,
+                         reasoningOutput: thinkingTokens, cacheCreation5m: cacheCreation5m, cacheCreation1h: cacheCreation1h,
+                         normalization: "anthropic.messages.v1")
     }
 }

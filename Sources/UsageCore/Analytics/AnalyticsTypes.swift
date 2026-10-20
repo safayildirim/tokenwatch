@@ -9,8 +9,12 @@ public struct UsageFilter: Sendable, Equatable {
     public var projectIDs: Set<Int64> = []
     /// Canonical model keys, for example `claude-opus-5-5`.
     public var models: Set<String> = []
-    public var sources: Set<String> = []
-    public var applications: Set<String> = []
+    public var providers: Set<ProviderID> = []
+    public var products: Set<ProductID> = []
+    /// Row ids of accounts, as listed by `AnalyticsEngine.filterOptions()`.
+    public var accounts: Set<Int64> = []
+    public var surfaces: Set<SurfaceID> = []
+    public var telemetrySources: Set<TelemetrySourceID> = []
     public var sessionIDs: Set<Int64> = []
     /// Free text matched against project name, working directory and session id.
     public var search = ""
@@ -45,13 +49,25 @@ public struct UsageFilter: Sendable, Equatable {
             sql.append("s.project_id IN (\(projectIDs.map { _ in "?" }.joined(separator: ",")))")
             params.append(contentsOf: projectIDs.sorted().map { .int($0) })
         }
-        if !sources.isEmpty {
-            sql.append("s.source_id IN (\(sources.map { _ in "?" }.joined(separator: ",")))")
-            params.append(contentsOf: sources.sorted().map { .text($0) })
+        if !providers.isEmpty {
+            sql.append("s.product_id IN (SELECT id FROM product WHERE provider_id IN (\(providers.map { _ in "?" }.joined(separator: ","))))")
+            params.append(contentsOf: providers.map(\.rawValue).sorted().map { .text($0) })
         }
-        if !applications.isEmpty {
-            sql.append("s.application IN (\(applications.map { _ in "?" }.joined(separator: ",")))")
-            params.append(contentsOf: applications.sorted().map { .text($0) })
+        if !products.isEmpty {
+            sql.append("s.product_id IN (\(products.map { _ in "?" }.joined(separator: ",")))")
+            params.append(contentsOf: products.map(\.rawValue).sorted().map { .text($0) })
+        }
+        if !accounts.isEmpty {
+            sql.append("s.account_id IN (\(accounts.map { _ in "?" }.joined(separator: ",")))")
+            params.append(contentsOf: accounts.sorted().map { .int($0) })
+        }
+        if !surfaces.isEmpty {
+            sql.append("s.surface_id IN (\(surfaces.map { _ in "?" }.joined(separator: ",")))")
+            params.append(contentsOf: surfaces.map(\.rawValue).sorted().map { .text($0) })
+        }
+        if !telemetrySources.isEmpty {
+            sql.append("s.telemetry_source_id IN (\(telemetrySources.map { _ in "?" }.joined(separator: ",")))")
+            params.append(contentsOf: telemetrySources.map(\.rawValue).sorted().map { .text($0) })
         }
         if !sessionIDs.isEmpty {
             sql.append("s.id IN (\(sessionIDs.map { _ in "?" }.joined(separator: ",")))")
@@ -79,6 +95,8 @@ public struct UsageTotals: Sendable, Equatable {
     public var requests = 0
     public var sessions = 0
     public var cost = EstimatedCost()
+    /// How many of the requests lacked each token category, so that a missing figure is not shown as zero.
+    public var coverage = UsageCoverage()
     public init() {}
 }
 
@@ -97,7 +115,7 @@ public enum Granularity: String, CaseIterable, Sendable, Identifiable {
 }
 
 public enum SeriesDimension: Sendable {
-    case none, model, project
+    case none, model, project, provider
 }
 
 public struct SeriesPoint: Sendable, Identifiable, Equatable {
@@ -112,15 +130,43 @@ public struct SeriesPoint: Sendable, Identifiable, Equatable {
 }
 
 public struct ModelUsageRow: Sendable, Identifiable, Equatable {
-    public var id: String { canonical }
+    public var id: String { provider.rawValue + "/" + canonical }
+    public var provider: ProviderID
     public var canonical: String
     public var displayName: String
     public var family: String
     public var tokens: TokenCounts
     public var requests: Int
     public var cost: EstimatedCost
+    public var coverage = UsageCoverage()
     /// Share of all processed tokens in the covered period.
     public var tokenShare: Double
+}
+
+/// Usage of one provider, or of one of its products.
+public struct ProviderUsageRow: Sendable, Identifiable, Equatable {
+    public var id: String { provider.rawValue + "/" + (product?.rawValue ?? "") }
+    public var provider: ProviderID
+    /// Nil when the row covers every product of the provider.
+    public var product: ProductID?
+    public var tokens: TokenCounts
+    public var requests: Int
+    public var sessions: Int
+    public var cost: EstimatedCost
+    public var coverage: UsageCoverage
+    public var lastActivity: Date?
+
+    public init(provider: ProviderID, product: ProductID?, tokens: TokenCounts, requests: Int, sessions: Int,
+                cost: EstimatedCost, coverage: UsageCoverage, lastActivity: Date?) {
+        self.provider = provider
+        self.product = product
+        self.tokens = tokens
+        self.requests = requests
+        self.sessions = sessions
+        self.cost = cost
+        self.coverage = coverage
+        self.lastActivity = lastActivity
+    }
 }
 
 public struct ProjectUsageRow: Sendable, Identifiable, Equatable {
@@ -138,11 +184,16 @@ public struct ProjectUsageRow: Sendable, Identifiable, Equatable {
 public struct SessionRow: Sendable, Identifiable, Equatable {
     public var id: Int64
     public var externalID: String
-    public var sourceID: String
+    public var productID: ProductID
+    public var provider: ProviderID
+    public var sourceID: TelemetrySourceID
+    public var accountID: Int64
+    public var accountLabel: String
+    public var surface: SurfaceID?
+    public var kind: SessionKind
     public var projectID: Int64?
     public var projectName: String
     public var projectPath: String?
-    public var application: String?
     public var clientVersion: String?
     public var cwd: String?
     public var startedAt: Date?
@@ -153,7 +204,8 @@ public struct SessionRow: Sendable, Identifiable, Equatable {
     public var agentRequests: Int
     public var agentCount: Int
     public var cost: EstimatedCost
-    /// The cost summary that Claude Code computed for the session, kept separate from the estimate.
+    public var coverage = UsageCoverage()
+    /// The cost summary that the source computed for the session, kept separate from the estimate.
     public var reportedCostUSD: Double?
     /// Display names of the models used, most-used first.
     public var models: [String]
@@ -188,13 +240,15 @@ public struct AgentUsage: Sendable, Identifiable, Equatable {
     public var topModel: String
 }
 
-/// How a session relates to one subscription quota window.
+/// How a session relates to one cycle of a quota window.
 ///
 /// The percentages here are shares of locally observed activity. They are not shares of the
 /// subscription allowance, which depends on factors that local logs cannot show.
 public struct QuotaWindowContext: Sendable, Identifiable, Equatable {
-    public var id: String { "\(kind)-\(windowEnd.timeIntervalSince1970)" }
-    public var kind: String
+    public var id: String { "\(poolKey)-\(windowKey)-\(windowEnd.timeIntervalSince1970)" }
+    public var poolKey: String
+    public var windowKey: String
+    public var windowMinutes: Int?
     public var windowStart: Date
     public var windowEnd: Date
     /// The highest account-level utilization reported during the window by an authoritative source.
@@ -229,6 +283,8 @@ public struct OverviewSnapshot: Sendable, Equatable {
     public var allTime = UsageTotals()
     public var totalSessions = 0
     public var activeSessions = 0
+    /// The number of sessions in the active state for each provider.
+    public var activeSessionsByProvider: [ProviderID: Int] = [:]
     public var computedAt = Date()
     public init() {}
 }

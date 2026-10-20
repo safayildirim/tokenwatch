@@ -78,7 +78,7 @@ final class CostEstimationTests: XCTestCase {
     func testPriceChangesApplyOnlyFromTheirEffectiveDate() throws {
         let env = try TestEnv()
         let change = t0 + 10 * 86_400_000
-        try PricingStore.upsertUserRate(env.db, PriceRate(model: "claude-opus-5-5", from: change, input: 1, output: 5, cacheRead: 0.1))
+        try PricingStore.upsertUserRate(env.db, PriceRate(provider: .anthropic, model: "claude-opus-5-5", from: change, input: 1, output: 5, cacheRead: 0.1))
         try Fixture.write([
             Fixture.assistant(id: "before", session: "S", at: change - 2 * 86_400_000, input: 1_000_000, output: 0),
             Fixture.assistant(id: "after", session: "S", at: change + 2 * 86_400_000, input: 1_000_000, output: 0),
@@ -92,7 +92,7 @@ final class CostEstimationTests: XCTestCase {
 
     func testBuiltinRatesAreReseededWithoutTouchingUserRates() throws {
         let env = try TestEnv()
-        try PricingStore.upsertUserRate(env.db, PriceRate(model: "my-model", input: 1, output: 2, cacheRead: 0.5))
+        try PricingStore.upsertUserRate(env.db, PriceRate(provider: .anthropic, model: "my-model", input: 1, output: 2, cacheRead: 0.5))
         try PricingStore.seedBuiltin(env.db)
         XCTAssertEqual(try env.db.read { try $0.scalarInt("SELECT count(*) FROM price_rate WHERE origin = 'user'") }, 1)
     }
@@ -205,7 +205,7 @@ final class AnalyticsQueryTests: XCTestCase {
         XCTAssertEqual(try engine.models().reduce(0.0) { $0 + $1.tokenShare }, 1.0, accuracy: 1e-9)
     }
 
-    func testFiltersByModelProjectApplicationAndSearch() throws {
+    func testFiltersByModelProjectSurfaceAndSearch() throws {
         let env = try populated()
         let engine = AnalyticsEngine(db: env.db)
 
@@ -215,7 +215,7 @@ final class AnalyticsQueryTests: XCTestCase {
         XCTAssertEqual(try engine.sessionRows(f).count, 1, "a model filter keeps only sessions that used the model")
 
         f = UsageFilter()
-        f.applications = ["claude-vscode"]
+        f.surfaces = [.vscode]
         XCTAssertEqual(try engine.totals(f).tokens.output, 300)
 
         f = UsageFilter()
@@ -284,15 +284,19 @@ final class AnalyticsQueryTests: XCTestCase {
         try env.syncAll()
         let windowEnd = t0 + 3 * 3_600_000
         try env.db.write { c in
+            let resolver = EntityResolver(c, registry: env.db.registry)
             for (pct, at) in [(40.0, t0 + 1000), (90.0, t0 + 120_000)] {
-                try c.run("INSERT INTO quota_snapshot(provider, window_kind, utilization_pct, resets_at, observed_at, authority) VALUES('claude-code-statusline','five_hour',?,?,?,'authoritative')",
-                          [.real(pct), .int(windowEnd), .int(at)])
+                try QuotaStore.record(QuotaObservation(provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
+                                                       windowKey: "300m", windowMinutes: 300, utilizationPercent: pct,
+                                                       resetsAt: Clock.date(ms: windowEnd), observedAt: Clock.date(ms: at),
+                                                       source: .claudeStatusLine),
+                                      originSessionID: nil, resolver: resolver)
             }
         }
         let engine = AnalyticsEngine(db: env.db)
         let small = try engine.sessionRows().first { $0.externalID == "SMALL" }!
         let detail = try XCTUnwrap(engine.sessionDetail(id: small.id))
-        let window = try XCTUnwrap(detail.windows.first { $0.kind == "five_hour" })
+        let window = try XCTUnwrap(detail.windows.first { $0.windowKey == "300m" })
         XCTAssertEqual(window.reportedPeakUtilization, 90)
         XCTAssertEqual(window.shareOfObservedFreshTokens!, 0.1, accuracy: 1e-9, "10% of the locally observed tokens")
         // The share of observed activity is a separate quantity from the account percentage and is never merged with it.

@@ -5,59 +5,116 @@ import UsageCore
 
 struct QuotaPage: View {
     @Environment(AppModel.self) private var model
-    @State private var history: [QuotaKind: [QuotaReading]] = [:]
+    @State private var history: [HistorySeries] = []
     @State private var days = 7
 
-    typealias QuotaKind = QuotaWindowKind
+    struct HistorySeries: Identifiable {
+        var id: String
+        var name: String
+        var readings: [QuotaReading]
+    }
 
     var body: some View {
         PageScroll {
-            ForEach(model.quotaStates.filter { $0.kind != .spendLimit || $0.reading != nil }) { s in
-                Card { QuotaMeter(state: s, onSetup: nil) }
-            }
-            QuotaSetupCard()
-            Card("Utilization history", subtitle: "Account-level percentages as reported by Claude Code, from the moments this Mac observed them.") {
-                Picker("Period", selection: $days) {
-                    Text("24 hours").tag(1); Text("7 days").tag(7); Text("30 days").tag(30)
-                }.pickerStyle(.segmented).frame(width: 260).labelsHidden()
-                let all = history.values.flatMap { $0 }
-                if all.isEmpty {
-                    Text("No history yet. Points are recorded whenever Claude Code reports a new value.").font(.callout).foregroundStyle(.secondary)
-                } else {
-                    HStack(spacing: 14) {
-                        LegendDot(color: Palette.series[0], label: "Five-hour window"); LegendDot(color: Palette.series[1], label: "Weekly window")
+            let pools = model.scopedPools
+            ForEach(model.providers, id: \.id) { provider in
+                let own = pools.filter { $0.pool.key.provider == provider.id }
+                // A provider with nothing to show and nothing found on this Mac is explained once, further down.
+                if !own.isEmpty && (own.contains { $0.windows.contains { $0.reading != nil } } || model.collectionState(of: provider.id) != .notFound) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(provider.name, systemImage: provider.symbol).font(.title3.weight(.semibold))
+                        ForEach(own) { pool in
+                            Card { QuotaPoolCard(pool: pool, onSetup: { model.selection = .quota }) }
+                        }
                     }
-                    Chart(all, id: \.observedAt) { r in
-                        LineMark(x: .value("Time", r.observedAt), y: .value("Used", r.utilizationPercent), series: .value("Window", r.kind.displayName))
-                            .foregroundStyle(by: .value("Window", r.kind.displayName))
-                            .interpolationMethod(.stepEnd)
-                    }
-                    .chartForegroundStyleScale(["Five-hour window": Palette.series[0], "Weekly window": Palette.series[1], "Spend limit": Palette.series[2]])
-                    .chartLegend(.hidden)
-                    .chartYScale(domain: 0...100)
-                    .chartYAxis { AxisMarks(position: .leading, values: [0, 25, 50, 75, 100]) { v in
-                        AxisGridLine().foregroundStyle(Palette.gridLine)
-                        AxisValueLabel { if let n = v.as(Int.self) { Text("\(n)%") } }
-                    } }
-                    .frame(height: 220)
                 }
             }
+            if model.providers.contains(where: { $0.id == .anthropic }), scopeIncludesAnthropic { QuotaSetupCard() }
+            unobservableCard
+            historyCard
             Card("What these numbers mean") {
                 VStack(alignment: .leading, spacing: 6) {
-                    bullet("Percentages and reset times come only from Claude itself. They are never calculated from token counts, because the subscription meter depends on more than raw tokens.")
-                    bullet("Claude Code reports them to its status line. The helper installed above copies just that figure to a local file.")
-                    bullet("The figure covers your whole account, including claude.ai chat, Cowork and other devices. Local sessions can explain only part of it.")
-                    bullet("The value updates while a Claude Code terminal session is in use. Between sessions it is marked stale, and after a reset it is shown as unknown rather than zero.")
+                    bullet("Percentages and reset times come only from the provider's own software. They are never calculated from token counts, because a subscription meter depends on more than raw tokens.")
+                    bullet("Each percentage belongs to one pool of one account. Pools are listed separately and are never added together, and two accounts of the same provider never share a figure.")
+                    bullet("Products that share an allowance share a pool. A figure reported by one of them is the state of the pool for all of them.")
+                    bullet("A figure is a snapshot taken when the provider last reported it. It is marked stale when it is old, and after a reset it is shown as unknown rather than zero.")
+                    bullet("Usage from apps and devices that leave no record on this Mac still counts toward the real figure. Local sessions can explain only part of it.")
                 }.font(.callout)
             }
         }
-        .task(id: "\(days)|\(model.dataVersion)") {
-            var out: [QuotaKind: [QuotaReading]] = [:]
-            for kind in [QuotaWindowKind.fiveHour, .sevenDay] {
-                out[kind] = await model.quota.history(kind: kind, since: Date().addingTimeInterval(-Double(days) * 86_400))
+        .task(id: "\(days)|\(model.dataVersion)|\(model.scopeVersion)") { await loadHistory() }
+    }
+
+    private var scopeIncludesAnthropic: Bool { model.scope.providers.isEmpty || model.scope.providers.contains(.anthropic) }
+
+    /// Allowances and products that exist but cannot be seen from this Mac.
+    private var unobservableCard: some View {
+        let registry = model.db.registry
+        let hidden = registry.products.filter { !$0.isObservable && (model.scope.providers.isEmpty || model.scope.providers.contains($0.provider)) }
+        return Group {
+            if !hidden.isEmpty {
+                Card("Not observable on this Mac", subtitle: "These count toward real limits but leave no record here, so no figure is shown for them and none is guessed.") {
+                    ForEach(hidden, id: \.id) { product in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack {
+                                Label(product.name, systemImage: "eye.slash").font(.callout.weight(.medium))
+                                ProviderChip(provider: product.provider)
+                            }
+                            Text(product.observability).font(.caption).foregroundStyle(.secondary)
+                            if let pool = registry.pools(of: product.id).first, pool.products.count > 1 || !pool.isObservable {
+                                Text(pool.note).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
             }
-            history = out
         }
+    }
+
+    private var historyCard: some View {
+        Card("Utilization history", subtitle: "Account-level percentages as reported by each provider, from the moments this Mac observed them.") {
+            Picker("Period", selection: $days) {
+                Text("24 hours").tag(1); Text("7 days").tag(7); Text("30 days").tag(30)
+            }.pickerStyle(.segmented).frame(width: 260).labelsHidden()
+            if history.allSatisfy({ $0.readings.isEmpty }) {
+                Text("No history yet. Points are recorded whenever a provider reports a new value.").font(.callout).foregroundStyle(.secondary)
+            } else {
+                let colors = Dictionary(uniqueKeysWithValues: history.enumerated().map { ($0.element.name, Palette.series[$0.offset % Palette.series.count]) })
+                HStack(spacing: 14) {
+                    ForEach(history.filter { !$0.readings.isEmpty }) { LegendDot(color: colors[$0.name] ?? Palette.other, label: $0.name) }
+                }
+                Chart {
+                    ForEach(history) { series in
+                        ForEach(series.readings, id: \.observedAt) { r in
+                            LineMark(x: .value("Time", r.observedAt), y: .value("Used", r.utilizationPercent), series: .value("Window", series.name))
+                                .foregroundStyle(by: .value("Window", series.name))
+                                .interpolationMethod(.stepEnd)
+                        }
+                    }
+                }
+                .chartForegroundStyleScale(domain: history.map(\.name), range: history.map { colors[$0.name] ?? Palette.other })
+                .chartLegend(.hidden)
+                .chartYScale(domain: 0...100)
+                .chartYAxis { AxisMarks(position: .leading, values: [0, 25, 50, 75, 100]) { v in
+                    AxisGridLine().foregroundStyle(Palette.gridLine)
+                    AxisValueLabel { if let n = v.as(Int.self) { Text("\(n)%") } }
+                } }
+                .frame(height: 220)
+            }
+        }
+    }
+
+    private func loadHistory() async {
+        let since = Date().addingTimeInterval(-Double(days) * 86_400)
+        var out: [HistorySeries] = []
+        for pool in model.scopedPools {
+            for w in pool.windows where w.reading != nil {
+                let readings = await model.quota.history(pool: pool.pool.key, windowKey: w.windowKey, since: since).filter { $0.authority == .authoritative }
+                let account = pool.pool.accountLabel == "Unassigned" ? "" : " (\(pool.pool.accountLabel))"
+                out.append(HistorySeries(id: "\(pool.id)/\(w.windowKey)", name: "\(pool.pool.name)\(account), \(w.displayName.lowercased())", readings: readings))
+            }
+        }
+        history = out
     }
 
     private func bullet(_ text: String) -> some View {
@@ -73,7 +130,7 @@ struct QuotaSetupCard: View {
     @State private var confirming = false
 
     var body: some View {
-        Card("Quota tracking", subtitle: "Subscription usage is only available through Claude Code's documented status line feature.") {
+        Card("Claude quota tracking", subtitle: "Claude subscription usage is only available through Claude Code's documented status line feature. Codex needs no setup, because it records its own quota snapshots.") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: inspection.isInstalled ? "checkmark.circle.fill" : "exclamationmark.circle")
@@ -95,9 +152,9 @@ struct QuotaSetupCard: View {
                 if !inspection.settingsIsValidJSON {
                     Text("~/.claude/settings.json is not valid JSON, so it will not be modified.").font(.caption).foregroundStyle(Palette.critical)
                 }
-                let status = model.quotaSource
-                Text(status.bridgeFileCount > 0
-                     ? "Receiving data from \(status.bridgeFileCount) Claude Code session\(status.bridgeFileCount == 1 ? "" : "s"); newest report \(Fmt.relative(status.newestBridgeObservation))."
+                let feed = model.quotaFeeds.first { $0.id == .claudeStatusLine }
+                Text((feed?.originCount ?? 0) > 0
+                     ? "Receiving data from \(feed!.originCount) Claude Code session\(feed!.originCount == 1 ? "" : "s"); newest report \(Fmt.relative(feed?.newestObservation))."
                      : "No report received yet. Quota appears after you send a message in a new Claude Code terminal session.")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
@@ -206,8 +263,6 @@ struct DiagnosticsPage: View {
                 }.font(.callout)
             }
 
-            Card("What can and cannot be observed") { CapabilityMatrix() }
-
             if let c = counts, !c.issues.isEmpty {
                 Card("Recent problems") {
                     ForEach(c.issues) { i in
@@ -241,14 +296,26 @@ struct DiagnosticsPage: View {
         running = true
         verification = "Recounting every token from the original files…"
         let db = model.db
+        let enabled = model.collectorSnapshot.sources.filter { $0.state != .notFound }.map(\.sourceID)
         Task.detached {
-            let text: String
-            do {
-                let r = try SourceVerifier(db: db).verify()
-                text = r.isConsistent
-                    ? "Verified: \(r.sessionsChecked) sessions and \(Fmt.grouped(Int64(r.requestsInSource))) requests recounted independently from the source files match the database exactly. (Adding up every log line instead would have overstated cache reads by \(String(format: "%.1f", Double(r.naiveSumOfAllLines.cacheRead) / Double(max(1, r.sourceTotals.cacheRead))))×.)"
-                    : "Mismatch in \(r.mismatches.count) places. Use \"Rebuild from source\" to repair, and please report it."
-            } catch { text = "Verification failed: \(error)" }
+            var lines: [String] = []
+            if enabled.contains(.claudeTranscripts) {
+                do {
+                    let r = try SourceVerifier(db: db).verify()
+                    lines.append(r.isConsistent
+                        ? "Claude Code: \(r.sessionsChecked) sessions and \(Fmt.grouped(Int64(r.requestsInSource))) requests recounted independently match the database exactly. (Adding up every log line instead would have overstated cache reads by \(String(format: "%.1f", Double(r.naiveSumOfAllLines.cacheRead) / Double(max(1, r.sourceTotals.cacheRead))))×.)"
+                        : "Claude Code: mismatch in \(r.mismatches.count) places. Use \"Rebuild from source\" to repair, and please report it.")
+                } catch { lines.append("Claude Code: verification failed: \(error)") }
+            }
+            if enabled.contains(.codexRollouts) {
+                do {
+                    let r = try CodexVerifier(db: db).verify()
+                    lines.append(r.isConsistent
+                        ? "Codex: \(r.sessionsChecked) sessions (\(r.recordSessions) by usage record, \(r.eventSessions) by event, \(r.forkSessions) fork) recounted independently match the database exactly."
+                        : "Codex: mismatch in \(r.mismatches.count) sessions. Use \"Rebuild from source\" to repair, and please report it.")
+                } catch { lines.append("Codex: verification failed: \(error)") }
+            }
+            let text = lines.isEmpty ? "No source with data to verify." : lines.joined(separator: "\n")
             await MainActor.run { verification = text; running = false }
         }
     }
@@ -267,31 +334,6 @@ struct DiagnosticsPage: View {
                          sizeMB: Double(db.diskUsageBytes()) / 1_048_576)
             }
         }.value
-    }
-}
-
-/// The documented capability matrix: what each Claude surface exposes locally.
-struct CapabilityMatrix: View {
-    private struct Row: Identifiable { var id: String { source }; var source, tokens, sessions, quota, note: String }
-    private let rows = [
-        Row(source: "Claude Code: terminal, VS Code, Desktop Code", tokens: "Full (per request, with cache split)", sessions: "Full", quota: "Via status line helper (terminal only)", note: "Transcripts under ~/.claude/projects, plus the live process registry."),
-        Row(source: "Claude Code OpenTelemetry", tokens: "Full, but needs a collector", sessions: "Full", quota: "No", note: "Identity-compatible with the transcripts; not enabled, to avoid extra processes."),
-        Row(source: "Claude Desktop: Chat and Cowork", tokens: "Not exposed", sessions: "Not exposed", quota: "No documented interface", note: "Counted in the account quota but invisible locally."),
-        Row(source: "claude.ai in a browser, other devices", tokens: "Not exposed", sessions: "Not exposed", quota: "Counted in the account quota", note: "Cannot be attributed to local sessions."),
-        Row(source: "Anthropic API usage reports", tokens: "API keys only", sessions: "No", quota: "No (not subscriptions)", note: "Does not describe subscription usage."),
-    ]
-    var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
-            GridRow { Text("Source").bold(); Text("Tokens").bold(); Text("Sessions").bold(); Text("Quota %").bold() }.font(.caption)
-            Divider()
-            ForEach(rows) { r in
-                GridRow(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 1) { Text(r.source).font(.caption.weight(.medium)); Text(r.note).font(.caption2).foregroundStyle(.secondary) }
-                    Text(r.tokens).font(.caption); Text(r.sessions).font(.caption); Text(r.quota).font(.caption)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

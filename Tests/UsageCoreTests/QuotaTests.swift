@@ -4,14 +4,18 @@ import XCTest
 final class QuotaEvaluatorTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_790_000_000)
 
-    private func reading(_ pct: Double, kind: QuotaWindowKind = .fiveHour, resets: TimeInterval?, observedAgo: TimeInterval = 30,
-                         authority: QuotaAuthority = .authoritative, provider: String = "claude-code-statusline") -> QuotaReading {
-        QuotaReading(kind: kind, utilizationPercent: pct, resetsAt: resets.map { now.addingTimeInterval($0) },
-                     observedAt: now.addingTimeInterval(-observedAgo), provider: provider, authority: authority)
+    private let pool = QuotaPoolInfo(key: QuotaPoolKey(provider: .anthropic, accountID: 1, poolKey: "claude-subscription"),
+                                     accountLabel: "Unassigned", name: "Claude subscription")
+
+    private func reading(_ pct: Double, resets: TimeInterval?, observedAgo: TimeInterval = 30,
+                         authority: QuotaAuthority = .authoritative, source: TelemetrySourceID = .claudeStatusLine) -> QuotaReading {
+        QuotaReading(utilizationPercent: pct, resetsAt: resets.map { now.addingTimeInterval($0) },
+                     observedAt: now.addingTimeInterval(-observedAgo), source: source, authority: authority)
     }
 
-    private func evaluate(_ readings: [QuotaReading], kind: QuotaWindowKind = .fiveHour, allowUnverified: Bool = false) -> QuotaWindowState {
-        QuotaEvaluator.evaluate(kind: kind, readings: readings, now: now, allowUnverified: allowUnverified)
+    private func evaluate(_ readings: [QuotaReading], allowUnverified: Bool = false) -> QuotaWindowState {
+        QuotaEvaluator.evaluate(pool: pool, windowKey: "300m", windowMinutes: 300, readings: readings, now: now,
+                                allowUnverified: allowUnverified)
     }
 
     func testAuthoritativeReadingShowsConsumedRemainingAndCountdown() {
@@ -34,9 +38,32 @@ final class QuotaEvaluatorTests: XCTestCase {
         XCTAssertFalse(s.isDisplayable)
     }
 
-    func testReadingsForOtherWindowsAreNotMixedUp() {
-        let s = evaluate([reading(81, kind: .sevenDay, resets: 86400)], kind: .fiveHour)
-        XCTAssertEqual(s.availability, .unavailable(.noData))
+    func testEvaluationDoesNotDependOnTheOrderOfReadings() {
+        let readings = [reading(40, resets: 3600, observedAgo: 600), reading(55, resets: 3600, observedAgo: 20),
+                        reading(97, resets: -600, observedAgo: 5), reading(30, resets: 3600, observedAgo: 3000)]
+        for ordering in [readings, readings.reversed(), readings.shuffled(), readings.shuffled()] {
+            XCTAssertEqual(evaluate(Array(ordering)).utilizationPercent, 55)
+        }
+    }
+
+    func testALateDeliveredOlderReadingNeverReplacesANewerOne() {
+        // An older observation that reaches the database after a newer one is simply the older of the two.
+        let newer = reading(70, resets: 3600, observedAgo: 10)
+        let older = reading(20, resets: 3600, observedAgo: 900)
+        XCTAssertEqual(evaluate([newer, older]).utilizationPercent, 70)
+        XCTAssertEqual(evaluate([older, newer]).utilizationPercent, 70)
+    }
+
+    func testWindowNamesComeFromTheirLength() {
+        XCTAssertEqual(evaluate([]).displayName, "5-hour window")
+        XCTAssertEqual(evaluate([]).shortName, "5h")
+        XCTAssertTrue(evaluate([]).isShort)
+        let weekly = QuotaEvaluator.evaluate(pool: pool, windowKey: "10080m", windowMinutes: 10080, readings: [], now: now, allowUnverified: false)
+        XCTAssertEqual(weekly.displayName, "Weekly window")
+        XCTAssertEqual(weekly.shortName, "Week")
+        XCTAssertFalse(weekly.isShort)
+        let odd = QuotaEvaluator.evaluate(pool: pool, windowKey: "90m", windowMinutes: 90, readings: [], now: now, allowUnverified: false)
+        XCTAssertEqual(odd.displayName, "90-minute window", "a window length that nobody planned for still gets a sensible name")
     }
 
     func testFreshnessAgesWithTheReading() {
@@ -70,7 +97,7 @@ final class QuotaEvaluatorTests: XCTestCase {
     }
 
     func testUnverifiedReadingsAreIgnoredByDefaultAndNeverAuthoritative() {
-        let hint = reading(77, resets: nil, authority: .unverified, provider: "claude-desktop-cache")
+        let hint = reading(77, resets: nil, authority: .unverified, source: .claudeDesktopCache)
         XCTAssertEqual(evaluate([hint]).availability, .unavailable(.noData))
         let shown = evaluate([hint], allowUnverified: true)
         XCTAssertEqual(shown.utilizationPercent, 77)
@@ -139,10 +166,12 @@ final class StatusLineSourceTests: XCTestCase {
             "seven_day": .init(usedPercentage: 81.5, resetsAt: now.timeIntervalSince1970 + 86400),
             "mystery": .init(usedPercentage: 5, resetsAt: nil),
         ]), name: "statusline-s1.json", in: dir)
-        let readings = StatusLineQuotaSource.readings(in: dir, now: now)
-        XCTAssertEqual(readings.count, 2, "unknown window kinds are ignored")
-        XCTAssertTrue(readings.allSatisfy { $0.authority == .authoritative && $0.origin == "s1" })
-        XCTAssertEqual(readings.first { $0.kind == .sevenDay }?.utilizationPercent, 81.5)
+        let readings = StatusLineQuotaSource.observations(in: dir, now: now)
+        XCTAssertEqual(readings.count, 2, "unknown window names are ignored")
+        XCTAssertTrue(readings.allSatisfy { $0.authority == .authoritative && $0.originSession == "s1" && $0.poolKey == "claude-subscription" })
+        XCTAssertTrue(readings.allSatisfy { $0.provider == .anthropic && $0.account.isUnassigned })
+        XCTAssertEqual(readings.first { $0.windowKey == "10080m" }?.utilizationPercent, 81.5)
+        XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.windowMinutes, 300)
     }
 
     func testCorruptAndForeignFilesAreIgnoredAndOldOnesPruned() throws {
@@ -154,7 +183,7 @@ final class StatusLineSourceTests: XCTestCase {
         let old = Date().addingTimeInterval(-20 * 86400)
         try write(QuotaBridgeFile(sessionId: "old", observedAt: Clock.ms(old), capturedAt: Clock.ms(old), fingerprint: "f",
                                   rateLimits: ["five_hour": .init(usedPercentage: 1, resetsAt: nil)]), name: "statusline-old.json", in: dir)
-        XCTAssertTrue(StatusLineQuotaSource.readings(in: dir).isEmpty)
+        XCTAssertTrue(StatusLineQuotaSource.observations(in: dir).isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("statusline-old.json").path))
     }
 
@@ -163,11 +192,11 @@ final class StatusLineSourceTests: XCTestCase {
         let url = env.root.appendingPathComponent("plan-usage-history.json")
         try #"{"version":2,"samples":[{"t":1790000000000,"org":"o","u":{"fh":4,"sd":0}},{"t":1790000900000,"org":"o","u":{"fh":19,"sd":41}}]}"#
             .write(to: url, atomically: true, encoding: .utf8)
-        let r = DesktopPlanUsageSource.readings(at: url)
+        let r = DesktopPlanUsageSource.observations(at: url)
         XCTAssertEqual(r.count, 2)
         XCTAssertTrue(r.allSatisfy { $0.authority == .unverified && $0.resetsAt == nil })
-        XCTAssertEqual(r.first { $0.kind == .fiveHour }?.utilizationPercent, 19, "the newest sample is used")
-        XCTAssertTrue(DesktopPlanUsageSource.readings(at: env.root.appendingPathComponent("missing.json")).isEmpty)
+        XCTAssertEqual(r.first { $0.windowKey == "300m" }?.utilizationPercent, 19, "the newest sample is used")
+        XCTAssertTrue(DesktopPlanUsageSource.observations(at: env.root.appendingPathComponent("missing.json")).isEmpty)
     }
 }
 
@@ -208,9 +237,9 @@ final class BridgeBinaryTests: XCTestCase {
         XCTAssertFalse(text.contains("secret-project"), "the working directory is never stored")
         XCTAssertFalse(text.contains("transcript"), "the transcript path is never stored")
         XCTAssertFalse(text.contains("claude-opus"), "the model is not stored")
-        let readings = StatusLineQuotaSource.readings(in: dir, now: Date(timeIntervalSince1970: 1_790_000_000))
-        XCTAssertEqual(readings.first { $0.kind == .fiveHour }?.utilizationPercent, 23.5)
-        XCTAssertEqual(readings.first { $0.kind == .fiveHour }?.resetsAt, Date(timeIntervalSince1970: 1_893_456_000))
+        let readings = StatusLineQuotaSource.observations(in: dir, now: Date(timeIntervalSince1970: 1_790_000_000))
+        XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.utilizationPercent, 23.5)
+        XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.resetsAt, Date(timeIntervalSince1970: 1_893_456_000))
         // Files are private to the user.
         let attrs = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("statusline-sess-1.json").path)
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
@@ -271,8 +300,8 @@ final class QuotaCoordinatorTests: XCTestCase {
         let dir = env.root.appendingPathComponent("quota")
         let desktop = env.root.appendingPathComponent("plan-usage-history.json")
         let settings = SettingsStore(db: env.db)
-        settings.update { $0.showDesktopPlanUsageHint = hint }
-        return (QuotaCoordinator(db: env.db, settings: settings, bridgeDirectory: dir, desktopCacheURL: desktop, clock: clock), dir, desktop)
+        settings.update { $0.showUnverifiedQuota = hint }
+        return (QuotaCoordinator(db: env.db, settings: settings, feeds: .claude(bridgeDirectory: dir, desktopCache: desktop), clock: clock), dir, desktop)
     }
 
     private func writeBridge(_ dir: URL, session: String = "s1", five: Double, observed: Date, resets: Date) throws {
@@ -291,8 +320,8 @@ final class QuotaCoordinatorTests: XCTestCase {
         try env.syncAll()
         let (coordinator, _, _) = makeCoordinator(env)
         await coordinator.start()
-        let states = await coordinator.states()
-        XCTAssertEqual(states.map(\.kind), [.fiveHour, .sevenDay])
+        let states = await coordinator.states().filter { $0.pool.key.provider == .anthropic }
+        XCTAssertEqual(states.map(\.windowKey), ["300m", "10080m"])
         for s in states {
             XCTAssertEqual(s.availability, .unavailable(.noData))
             XCTAssertNil(s.utilizationPercent, "no percentage may be inferred from token counts")
@@ -311,10 +340,10 @@ final class QuotaCoordinatorTests: XCTestCase {
         try writeBridge(dir, five: 63, observed: now, resets: now.addingTimeInterval(7200))
         // Wait for the file event to reach the coordinator.
         _ = await iterator.next()
-        var state = await coordinator.states().first { $0.kind == .fiveHour }!
+        var state = await coordinator.window("300m")!
         for _ in 0..<30 where state.utilizationPercent == nil {
             try await Task.sleep(for: .milliseconds(100))
-            state = await coordinator.states().first { $0.kind == .fiveHour }!
+            state = await coordinator.window("300m")!
         }
         XCTAssertEqual(state.utilizationPercent, 63)
         XCTAssertEqual(state.remainingPercent, 37)
@@ -322,13 +351,13 @@ final class QuotaCoordinatorTests: XCTestCase {
         // Refreshing again with the same data adds nothing to the history.
         await coordinator.refresh(force: true)
         await coordinator.refresh(force: true)
-        let rows = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot WHERE window_kind = 'five_hour'") }
+        let rows = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot q JOIN quota_window w ON w.id = q.window_id WHERE w.window_key = '300m'") }
         XCTAssertEqual(rows, 1)
 
         // A genuinely new value is appended.
         try writeBridge(dir, five: 70, observed: now.addingTimeInterval(60), resets: now.addingTimeInterval(7200))
         await coordinator.refresh(force: true)
-        let after = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot WHERE window_kind = 'five_hour'") }
+        let after = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot q JOIN quota_window w ON w.id = q.window_id WHERE w.window_key = '300m'") }
         XCTAssertEqual(after, 2)
         await coordinator.stop()
     }
@@ -343,7 +372,7 @@ final class QuotaCoordinatorTests: XCTestCase {
         try writeBridge(dir, five: 90, observed: now, resets: now.addingTimeInterval(3600))
         await coordinator.start()
         try await Task.sleep(for: .milliseconds(300))
-        let s = await coordinator.states().first { $0.kind == .fiveHour }!
+        let s = await coordinator.window("300m")!
         XCTAssertEqual(s.utilizationPercent, 90)
         XCTAssertTrue(s.isAuthoritative)
         await coordinator.stop()
@@ -357,16 +386,16 @@ final class QuotaCoordinatorTests: XCTestCase {
         try writeBridge(dir, five: 55, observed: base, resets: base.addingTimeInterval(2 * 3600))
         await coordinator.start()
         try await Task.sleep(for: .milliseconds(300))
-        var s = await coordinator.states().first { $0.kind == .fiveHour }!
+        var s = await coordinator.window("300m")!
         XCTAssertEqual(s.freshness, .fresh)
 
         box.now = base.addingTimeInterval(90 * 60)
-        s = await coordinator.states().first { $0.kind == .fiveHour }!
+        s = await coordinator.window("300m")!
         XCTAssertEqual(s.freshness, .stale)
         XCTAssertEqual(s.utilizationPercent, 55)
 
         box.now = base.addingTimeInterval(3 * 3600)
-        s = await coordinator.states().first { $0.kind == .fiveHour }!
+        s = await coordinator.window("300m")!
         if case .windowElapsed = s.availability {} else { XCTFail("expected an elapsed window, got \(s.availability)") }
         XCTAssertNil(s.utilizationPercent)
         await coordinator.stop()
@@ -378,7 +407,7 @@ final class QuotaCoordinatorTests: XCTestCase {
         try #"{"version":2,"samples":[{"t":\#(Clock.nowMs()),"org":"o","u":{"fh":19,"sd":41}}]}"#.write(to: desktop, atomically: true, encoding: .utf8)
         await off.start()
         try await Task.sleep(for: .milliseconds(200))
-        let offStates = await off.states()
+        let offStates = await off.states().filter { $0.pool.key.provider == .anthropic }
         XCTAssertEqual(offStates.first?.availability, .unavailable(.noData))
         await off.stop()
 
@@ -387,7 +416,7 @@ final class QuotaCoordinatorTests: XCTestCase {
         try #"{"version":2,"samples":[{"t":\#(Clock.nowMs()),"org":"o","u":{"fh":19,"sd":41}}]}"#.write(to: desktop2, atomically: true, encoding: .utf8)
         await on.start()
         try await Task.sleep(for: .milliseconds(200))
-        let s = await on.states().first!
+        let s = await on.window("300m")!
         XCTAssertEqual(s.utilizationPercent, 19)
         XCTAssertFalse(s.isAuthoritative)
         XCTAssertFalse(s.isDisplayable)
@@ -406,8 +435,11 @@ final class QuotaCoordinatorTests: XCTestCase {
         try JSONEncoder().encode(f).write(to: dir.appendingPathComponent("statusline-g.json"))
         await coordinator.start()
         try await Task.sleep(for: .milliseconds(300))
-        let kinds = await coordinator.states().map(\.kind)
-        XCTAssertEqual(kinds, [.fiveHour, .sevenDay, .spendLimit])
+        let keys = await coordinator.states().filter { $0.pool.key.provider == .anthropic }.map(\.windowKey)
+        XCTAssertEqual(Set(keys), ["300m", "10080m", "spend_limit"])
+        let spend = await coordinator.window("spend_limit")!
+        XCTAssertNil(spend.windowMinutes, "a spend limit has no fixed length")
+        XCTAssertEqual(spend.utilizationPercent, 62.8)
         await coordinator.stop()
     }
 }

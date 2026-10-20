@@ -25,7 +25,7 @@ struct ClaudeUsageMonitorApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Claude Usage", id: "dashboard") {
+        Window("AI Usage", id: "dashboard") {
             if let model {
                 DashboardView().environment(model).preferredColorScheme(model.settings.appearance.colorScheme)
             }

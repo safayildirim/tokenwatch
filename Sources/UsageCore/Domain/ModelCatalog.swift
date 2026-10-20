@@ -5,6 +5,9 @@ import Foundation
 /// Logs contain forms such as `claude-opus-5-5`, `claude-opus-5-5[1m]` (a context-window variant),
 /// `claude-haiku-4-5-20251001` (a dated snapshot) or provider-prefixed names. Prices, charts and
 /// filters all work on the canonical form, while the raw identifier is preserved on every request.
+///
+/// Naming conventions belong to a provider, so the same raw string can be described differently
+/// for different providers. A provider without special rules gets its raw id as the canonical form.
 public enum ModelCatalog {
     public struct Description: Sendable, Equatable {
         public var canonical: String
@@ -12,7 +15,17 @@ public enum ModelCatalog {
         public var displayName: String
     }
 
-    public static func describe(_ raw: String) -> Description {
+    public static func describe(_ raw: String, provider: ProviderID = .anthropic) -> Description {
+        switch provider {
+        case .anthropic: return describeAnthropic(raw)
+        case .openAI: return describeOpenAI(raw)
+        default:
+            let canonical = raw.lowercased()
+            return Description(canonical: canonical, family: "other", displayName: raw)
+        }
+    }
+
+    private static func describeAnthropic(_ raw: String) -> Description {
         var s = raw.lowercased()
         if let bracket = s.firstIndex(of: "[") { s = String(s[..<bracket]) }
         if let at = s.firstIndex(of: "@") { s = String(s[..<at]) }
@@ -36,5 +49,17 @@ public enum ModelCatalog {
             }
         }
         return Description(canonical: s, family: family, displayName: display)
+    }
+
+    private static func describeOpenAI(_ raw: String) -> Description {
+        var s = raw.lowercased()
+        // Strip a trailing snapshot date such as -2026-10-01.
+        if let range = s.range(of: #"-\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) { s.removeSubrange(range) }
+        let family: String
+        if s.hasPrefix("gpt") { family = "gpt" }
+        else if s.contains("codex") { family = "codex" }
+        else if s.range(of: #"^o\d"#, options: .regularExpression) != nil { family = "o-series" }
+        else { family = "other" }
+        return Description(canonical: s, family: family, displayName: raw)
     }
 }

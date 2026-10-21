@@ -43,6 +43,49 @@ private func figure(_ text: String, size: CGFloat) -> Text {
     Text(text).font(.system(size: size, weight: .semibold, design: .rounded)).monospacedDigit()
 }
 
+// MARK: - Equal grid
+
+/// Lays cards out in rows of equal columns, every card as tall as the tallest, so a row never has ragged edges and a
+/// card left alone on the last row keeps the size of the others. Given more height than it needs, it shares the
+/// extra among its rows, so a grid inside a stretched card reaches the card's bottom edge.
+struct EqualGrid: Layout {
+    var minimumWidth: CGFloat
+    var spacing: CGFloat
+
+    private func columns(width: CGFloat, count: Int) -> Int {
+        max(1, min(count, Int((width + spacing) / (minimumWidth + spacing))))
+    }
+
+    private func metrics(width: CGFloat, subviews: Subviews) -> (columns: Int, rows: Int, cell: CGSize) {
+        let cols = columns(width: width, count: subviews.count)
+        let rows = (subviews.count + cols - 1) / cols
+        let cellWidth = max(0, (width - spacing * CGFloat(cols - 1)) / CGFloat(cols))
+        let cellHeight = subviews.map { $0.sizeThatFits(ProposedViewSize(width: cellWidth, height: nil)).height }.max() ?? 0
+        return (cols, rows, CGSize(width: cellWidth, height: cellHeight))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+            ?? minimumWidth * CGFloat(subviews.count) + spacing * CGFloat(subviews.count - 1)
+        let m = metrics(width: width, subviews: subviews)
+        let natural = m.cell.height * CGFloat(m.rows) + spacing * CGFloat(m.rows - 1)
+        let offered = proposal.height.flatMap { $0.isFinite ? $0 : nil } ?? 0
+        return CGSize(width: width, height: max(natural, offered))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let m = metrics(width: bounds.width, subviews: subviews)
+        let height = max(m.cell.height, (bounds.height - spacing * CGFloat(m.rows - 1)) / CGFloat(m.rows))
+        for (i, view) in subviews.enumerated() {
+            let x = bounds.minX + CGFloat(i % m.columns) * (m.cell.width + spacing)
+            let y = bounds.minY + CGFloat(i / m.columns) * (height + spacing)
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: m.cell.width, height: height))
+        }
+    }
+}
+
 // MARK: - Limits
 
 /// The quota windows of every pool in scope, with what the current pace leads to.
@@ -58,7 +101,7 @@ struct OverviewLimits: View {
             if pools.isEmpty {
                 Text("No provider has reported a limit yet.").foregroundStyle(.secondary).overviewCard()
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 420), spacing: 12, alignment: .top)], spacing: 12) {
+                EqualGrid(minimumWidth: 420, spacing: 12) {
                     ForEach(pools) { pool in poolCard(pool) }
                 }
             }
@@ -80,7 +123,7 @@ struct OverviewLimits: View {
             }
             if !info.note.isEmpty { Text(info.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if connected {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10, alignment: .top)], spacing: 10) {
+                EqualGrid(minimumWidth: 220, spacing: 10) {
                     ForEach(pool.windows) { w in WindowTile(state: w, now: now) }
                 }
             } else {
@@ -90,9 +133,11 @@ struct OverviewLimits: View {
                         .foregroundStyle(.secondary).frame(maxWidth: 520, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     Button("Connect Limits") { model.selection = .quota }.buttonStyle(.borderedProminent)
                 }
+                .frame(maxHeight: .infinity, alignment: .top)
                 .overviewInset(padding: 14)
             }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .overviewCard()
     }
 
@@ -128,6 +173,7 @@ private struct WindowTile: View {
                 .accessibilityHidden(true)
             content
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .overviewInset()
         .accessibilityElement(children: .combine)
     }
@@ -246,7 +292,7 @@ struct OverviewGlance: View {
                 }
                 .overviewCard()
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 12, alignment: .top)], spacing: 12) {
+            EqualGrid(minimumWidth: 210, spacing: 12) {
                 ForEach(tiles, id: \.label) { t in StatTile(tile: t) }
             }
         }
@@ -297,7 +343,7 @@ private struct StatTile: View {
             Text(tile.note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 12).padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
         .accessibilityElement(children: .combine)

@@ -48,7 +48,7 @@ public enum Palette {
     public static let critical = Color(light: 0xd03b3b, dark: 0xe0605f)
 
     public static let gridLine = Color(light: 0xe4e3df, dark: 0x34342f)
-    public static let track = Color(light: 0xe9e8e4, dark: 0x2b2b28)
+    public static let track = Color(light: 0xe9e8e4, dark: 0x36362f)
 
     /// The ground of a panel inside a card, and of a row in a list.
     public static let inset = Color(light: 0xf5f5f4, dark: 0x262625)

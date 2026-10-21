@@ -33,6 +33,11 @@ cp "$BIN_DIR/Tokenwatch" "$APP/Contents/MacOS/Tokenwatch"
 cp "$BIN_DIR/tw-statusline" "$APP/Contents/MacOS/tw-statusline"
 cp "$BIN_DIR/tw" "$APP/Contents/MacOS/tw"
 
+echo "==> Localizations"
+# The app follows the system language: macOS picks Turkish when it comes before English in the user's list of
+# preferred languages (or when Tokenwatch is set to Turkish under Language & Region), and English otherwise.
+cp -R Localization/en.lproj Localization/tr.lproj "$APP/Contents/Resources/"
+
 echo "==> Icon"
 ICONSET="$BUILD_DIR/AppIcon.iconset"
 rm -rf "$ICONSET"
@@ -45,6 +50,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>tr</string></array>
     <key>CFBundleExecutable</key><string>Tokenwatch</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>

@@ -705,3 +705,9 @@
 "Undocumented, unverified, and has no reset times. Shown only when enabled, and never used for alerts." = "Belgelenmemiştir, doğrulanmamıştır ve sıfırlanma zamanı içermez. Yalnızca etkinleştirildiğinde gösterilir ve uyarılar için hiçbir zaman kullanılmaz.";
 "Quota figures are snapshots written when a request completes, so they go stale between requests. ChatGPT Chat is not covered." = "Kota değerleri bir istek tamamlandığında yazılan anlık görüntülerdir, bu yüzden istekler arasında eskir. ChatGPT Chat kapsanmaz.";
 "Unassigned" = "Atanmamış";
+
+/* Language setting */
+"Language" = "Dil";
+"System Default" = "Sistem Varsayılanı";
+"Tokenwatch shows the new language after it restarts." = "Tokenwatch yeni dili yeniden başladıktan sonra gösterir.";
+"Restart Now" = "Şimdi Yeniden Başlat";

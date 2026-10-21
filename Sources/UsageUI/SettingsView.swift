@@ -97,6 +97,7 @@ private struct GeneralSettings: View {
                 Picker("Theme", selection: Binding(get: { model.settings.appearance }, set: { v in model.updateSettings { $0.appearance = v } })) {
                     Text("Match system").tag(AppearanceMode.system); Text("Light").tag(AppearanceMode.light); Text("Dark").tag(AppearanceMode.dark)
                 }.pickerStyle(.segmented)
+                LanguagePicker()
             }
             Section("Session status") {
                 Stepper("Active if seen within \(model.settings.activeWithinSeconds) seconds",
@@ -434,5 +435,26 @@ private struct AboutSettings: View {
             }.foregroundStyle(.secondary)
         }
         .padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Chooses the language of the interface. A change is saved at once and shown after a restart, which the picker offers.
+struct LanguagePicker: View {
+    @State private var choice = AppLanguage.saved
+
+    var body: some View {
+        Picker("Language", selection: $choice) {
+            ForEach(AppLanguage.allCases) { language in
+                Text(language == .system ? "\(language.label) (\(AppLanguage.systemChoice.label))" : language.label).tag(language)
+            }
+        }
+        .onChange(of: choice) { _, new in new.save() }
+        if choice.resolved != AppLanguage.current {
+            HStack(spacing: 8) {
+                Text("Tokenwatch shows the new language after it restarts.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Restart Now") { AppLanguage.relaunch() }
+            }
+        }
     }
 }

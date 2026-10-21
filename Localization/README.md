@@ -1,8 +1,10 @@
 # Localization
 
-Tokenwatch ships in English and Turkish. macOS chooses the language: the first of the user's preferred languages
-that the app supports, falling back to English. A user can pick another language for Tokenwatch alone in
-System Settings › General › Language & Region › Applications.
+Tokenwatch ships in English and Turkish. By default macOS chooses the language: the first of the user's preferred
+languages that the app supports, falling back to English. Settings › General › Appearance › Language pins the app to
+English or Turkish, or returns it to the system's choice. It writes the app's own `AppleLanguages` preference, the
+same one System Settings › General › Language & Region › Applications writes, and offers to restart the app,
+because macOS reads that preference only at launch (see `Sources/UsageUI/AppLanguage.swift`).
 
 - The English text in the source code is the key. SwiftUI literals (`Text("…")`, `Button("…")`, `.help("…")`) are
   looked up automatically; strings built in code use `String(localized: "…")`.

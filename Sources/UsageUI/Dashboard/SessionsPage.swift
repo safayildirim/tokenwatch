@@ -67,8 +67,8 @@ struct SessionsPage: View {
             Divider()
             if visible.isEmpty && !loading {
                 if filter.isFiltering {
-                    EmptyState(symbol: "line.3.horizontal.decrease.circle", title: "No sessions match",
-                               message: "Try removing a filter or widening the date range.")
+                    EmptyState(symbol: "line.3.horizontal.decrease.circle", title: String(localized: "No sessions match"),
+                               message: String(localized: "Try removing a filter or widening the date range."))
                         .overlay(alignment: .bottom) { Button("Clear filters") { filter = SessionFilterState() }.padding(.bottom, 20) }
                 } else {
                     NoDataNotice()
@@ -96,9 +96,9 @@ struct SessionsPage: View {
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.primary.opacity(0.12)))
             .frame(minWidth: 220, maxWidth: 320)
 
-            multiMenu("Project", selection: $filter.projectIDs, items: options.projects.map { ($0.id, $0.name) })
-            multiMenu("Model", selection: $filter.models, items: options.models.map { ($0.canonical, $0.displayName) })
-            multiMenu("Status", selection: $filter.statuses, items: SessionState.allCases.map { ($0, $0.label) })
+            multiMenu(String(localized: "Project"), selection: $filter.projectIDs, items: options.projects.map { ($0.id, $0.name) })
+            multiMenu(String(localized: "Model"), selection: $filter.models, items: options.models.map { ($0.canonical, $0.displayName) })
+            multiMenu(String(localized: "Status"), selection: $filter.statuses, items: SessionState.allCases.map { ($0, $0.label) })
             RangePicker(selection: $filter.range)
             Spacer()
             if filter.isFiltering { Button("Clear") { filter = SessionFilterState() } }
@@ -113,7 +113,7 @@ struct SessionsPage: View {
             }
             if !selection.wrappedValue.isEmpty { Divider(); Button("Clear") { selection.wrappedValue = [] } }
         } label: {
-            Text(selection.wrappedValue.isEmpty ? title : "\(title): \(selection.wrappedValue.count)")
+            Text(selection.wrappedValue.isEmpty ? title : String(localized: "\(title): \(selection.wrappedValue.count)"))
         }
         .menuStyle(.button).fixedSize()
     }

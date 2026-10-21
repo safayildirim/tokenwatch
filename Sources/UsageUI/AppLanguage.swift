@@ -7,9 +7,9 @@ import Foundation
 /// The choice is the app's own `AppleLanguages` preference, the same one that System Settings › Language & Region ›
 /// Applications writes. macOS reads it once, when the app starts, so a change takes effect after a restart: switching
 /// in place would leave the text that is already on screen, and every string built in code, in the old language.
-enum AppLanguage: String, CaseIterable, Identifiable {
+public enum AppLanguage: String, CaseIterable, Identifiable {
     case system, english = "en", turkish = "tr"
-    var id: String { rawValue }
+    public var id: String { rawValue }
 
     private static let key = "AppleLanguages"
 
@@ -55,16 +55,29 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         else { UserDefaults.standard.set([rawValue], forKey: Self.key) }
     }
 
-    /// Quits and opens the app again. The new copy is started only once this one has exited, because a copy that
-    /// starts while another holds the collector lock hands over to it and quits.
+    /// The argument that tells a new copy which process it replaces.
+    static let relaunchArgument = "--relaunch-after"
+
+    /// Quits and opens the app again. macOS starts the new copy before this one quits: a helper process started from
+    /// here would belong to this app and be ended with it. The new copy is told to wait until this one has exited,
+    /// because a copy that starts while another holds the collector lock hands over to it and quits.
     @MainActor
     static func relaunch() {
-        let path = Bundle.main.bundleURL.path
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"", path]
-        try? task.run()
-        NSApplication.shared.terminate(nil)
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = [relaunchArgument, String(ProcessInfo.processInfo.processIdentifier)]
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            Task { @MainActor in
+                // If the new copy could not be started, staying open is better than leaving the user with no app.
+                if error == nil { NSApplication.shared.terminate(nil) }
+            }
+        }
+    }
+
+    /// In a copy started by `relaunch()`, waits for the copy it replaces to exit, for at most ten seconds.
+    public static func waitForReplacedCopy(_ args: [String] = CommandLine.arguments) {
+        guard let i = args.firstIndex(of: relaunchArgument), i + 1 < args.count, let pid = pid_t(args[i + 1]) else { return }
+        let deadline = Date().addingTimeInterval(10)
+        while kill(pid, 0) == 0 && Date() < deadline { usleep(100_000) }
     }
 }

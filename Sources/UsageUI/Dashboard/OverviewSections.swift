@@ -604,10 +604,7 @@ struct OverviewRanking: View {
                 CardHeading(title: "What used the most",
                             subtitle: tab == .projects ? "New tokens \(period.phrase). Click a project for details." : "New tokens \(period.phrase).")
                 Spacer(minLength: 0)
-                Picker("Group by", selection: $tab) {
-                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Segments(title: "Group by", selection: $tab, items: Tab.allCases.map { ($0, $0.rawValue) })
             }
             VStack(spacing: 4) {
                 ForEach(rows) { row in

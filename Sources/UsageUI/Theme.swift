@@ -53,6 +53,8 @@ public enum Palette {
     /// The ground of a panel inside a card, and of a row in a list.
     public static let inset = Color(light: 0xf5f5f4, dark: 0x262625)
     public static let insetHover = Color(light: 0xececeb, dark: 0x2f2f2e)
+    /// The chosen segment of a segmented control.
+    public static let segmentOn = Color(light: 0xffffff, dark: 0x5b5b5f)
 
     /// Providers take the slots that models and projects reach last, in the registry's order, so a provider keeps its
     /// color on every page and is rarely mistaken for the first models or projects.

@@ -383,6 +383,11 @@ struct OverviewScopeBar: View {
                 HStack(spacing: 24) { periodControl; providerControl }
                 menus
             }
+            VStack(alignment: .leading, spacing: 10) {
+                periodControl
+                providerControl
+                menus
+            }
         }
         .padding(.horizontal, 20).padding(.vertical, 10)
         .accessibilityElement(children: .contain)
@@ -392,10 +397,7 @@ struct OverviewScopeBar: View {
     private var periodControl: some View {
         HStack(spacing: 8) {
             Text("Period").font(.caption).foregroundStyle(.secondary)
-            Picker("Period", selection: $period) {
-                ForEach(OverviewPeriod.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            Segments(title: "Period", selection: $period, items: OverviewPeriod.allCases.map { ($0, $0.label) })
         }
     }
 
@@ -408,11 +410,8 @@ struct OverviewScopeBar: View {
             set: { value in model.scope.providers = value == "all" ? [] : [ProviderID(rawValue: value)] })
         return HStack(spacing: 8) {
             Text("Provider").font(.caption).foregroundStyle(.secondary)
-            Picker("Provider", selection: selection) {
-                Text("All").tag("all")
-                ForEach(model.filterOptions.providers, id: \.self) { Text(model.toolName($0)).tag($0.rawValue) }
-            }
-            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            Segments(title: "Provider", selection: selection,
+                     items: [("all", "All")] + model.filterOptions.providers.map { ($0.rawValue, model.toolName($0)) })
         }
     }
 
@@ -436,6 +435,40 @@ struct OverviewScopeBar: View {
 }
 
 // MARK: - Shared pieces
+
+/// A segmented control whose segments are as wide as their labels. The system's segmented picker makes every
+/// segment as wide as the longest one, which leaves a short label like "All" floating in a wide button.
+struct Segments<T: Hashable>: View {
+    var title: String
+    @Binding var selection: T
+    var items: [(T, String)]
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items, id: \.0) { item in
+                let on = item.0 == selection
+                Button { selection = item.0 } label: {
+                    Text(item.1).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                        .padding(.horizontal, 12).frame(height: 24)
+                        .background {
+                            if on {
+                                RoundedRectangle(cornerRadius: 6).fill(Palette.segmentOn)
+                                    .shadow(color: .black.opacity(0.15), radius: 1, y: 1)
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.06)))
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+}
 
 extension View {
     /// The card that every section of the overview sits on.

@@ -17,11 +17,14 @@ extension AppModel {
         Palette.provider(at: db.registry.providers.firstIndex { $0.id == id } ?? -1)
     }
 
-    /// The name of the tools through which a provider's usage reaches this Mac, such as a coding agent's name. It
-    /// falls back to the provider's own name before any of its products has recorded anything.
+    /// The name of the tool through which a provider's usage reaches this Mac, such as a coding agent's name: the
+    /// provider's first product, in the registry's order, that has recorded anything. Only one name is used, so that
+    /// a label stays short when a provider's sessions carry several products. It falls back to the provider's own
+    /// name before any of its products has recorded anything.
     func toolName(_ id: ProviderID) -> String {
-        let products = filterOptions.products.filter { db.registry.providerOf(product: $0) == id }
-        return products.isEmpty ? providerName(id) : ListFormatter.localizedString(byJoining: products.map(productName))
+        let recorded = Set(filterOptions.products)
+        let first = db.registry.products.first { $0.provider == id && recorded.contains($0.id) }
+        return first?.name ?? providerName(id)
     }
 
     /// True when a pool has no figure yet because the user can still switch on the way to get one.

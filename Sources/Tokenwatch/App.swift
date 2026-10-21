@@ -8,18 +8,16 @@ struct TokenwatchApp: App {
 
     @State private var model: AppModel?
 
-    /// Held for as long as the process runs. Releasing it would let a second copy start collecting.
-    private static var instanceLock: SingleInstanceLock?
-
     init() {
         if CommandLineActions.handle() { exit(0) }
-        AppLanguage.waitForReplacedCopy()
-        // Opening the app a second time brings the running copy forward instead of starting a second collector.
-        guard let lock = SingleInstanceLock.acquire() else {
+        // Opening the app a second time brings the running copy forward instead of starting a second collector. A copy
+        // started by a restart gives the copy it replaces a few seconds to let go of the lock.
+        guard let lock = SingleInstanceLock.acquire(retryingFor: AppLanguage.isRelaunch ? 5 : 0) else {
             SingleInstanceLock.activateRunningCopy()
             exit(0)
         }
-        Self.instanceLock = lock
+        // Held for as long as the process runs. Releasing it would let a second copy start collecting.
+        SingleInstanceLock.held = lock
         _model = State(initialValue: try? AppModel.bootstrap())
     }
 

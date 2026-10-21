@@ -440,7 +440,9 @@ private struct AboutSettings: View {
 
 /// Chooses the language of the interface. A change is saved at once and shown after a restart, which the picker offers.
 struct LanguagePicker: View {
+    @Environment(AppModel.self) private var model
     @State private var choice = AppLanguage.saved
+    @State private var restarting = false
 
     var body: some View {
         Picker("Language", selection: $choice) {
@@ -453,7 +455,13 @@ struct LanguagePicker: View {
             HStack(spacing: 8) {
                 Text("Tokenwatch shows the new language after it restarts.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Restart Now") { AppLanguage.relaunch() }
+                Button {
+                    restarting = true
+                    AppLanguage.relaunch(model: model)
+                } label: {
+                    restarting ? Text("Restarting…") : Text("Restart Now")
+                }
+                .disabled(restarting)
             }
         }
     }

@@ -12,6 +12,9 @@ public final class SingleInstanceLock {
 
     private init(descriptor: Int32) { self.descriptor = descriptor }
 
+    /// The lock this process holds, so that a restart can hand it to the new copy before quitting.
+    nonisolated(unsafe) public static var held: SingleInstanceLock?
+
     deinit { release() }
 
     /// Takes the lock, or returns nil when another process holds it.
@@ -25,6 +28,17 @@ public final class SingleInstanceLock {
             return nil
         }
         return SingleInstanceLock(descriptor: fd)
+    }
+
+    /// Takes the lock, trying again for up to `seconds` while another process holds it. A copy that a restart started
+    /// uses this, because the copy it replaces may still be letting go of the lock.
+    public static func acquire(retryingFor seconds: TimeInterval) -> SingleInstanceLock? {
+        let deadline = Date().addingTimeInterval(seconds)
+        while true {
+            if let lock = acquire() { return lock }
+            if Date() >= deadline { return nil }
+            usleep(100_000)
+        }
     }
 
     public func release() {

@@ -46,7 +46,7 @@ struct ProvidersPage: View {
                                 .foregroundStyle(product.isObservable ? Palette.good : Color.secondary)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(product.name).font(.callout.weight(.medium))
-                                Text(product.observability).font(.caption).foregroundStyle(.secondary)
+                                Text(DisplayText.localized(product.observability)).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -84,7 +84,7 @@ struct ProvidersPage: View {
                 Spacer()
                 Text(statusText(for: health, feed: feed)).font(.caption).foregroundStyle(.secondary)
             }
-            Text(source.limitations).font(.caption).foregroundStyle(.secondary)
+            Text(DisplayText.localized(source.limitations)).font(.caption).foregroundStyle(.secondary)
             if let health {
                 Text("\(health.filesKnown) files · last success \(Fmt.relative(health.lastSuccessAt))").font(.caption).foregroundStyle(.secondary)
                 if let error = health.lastError, health.state != .notFound { Text(error).font(.caption).foregroundStyle(Palette.warning) }

@@ -5,12 +5,12 @@ import UsageCore
 
 extension AppModel {
     /// The registry is the single source of names, so a provider added later is labelled without changing any view.
-    func surfaceName(_ id: SurfaceID?) -> String { id.flatMap { db.registry.surface($0)?.name } ?? "—" }
+    func surfaceName(_ id: SurfaceID?) -> String { id.flatMap { db.registry.surface($0)?.name }.map(DisplayText.localized) ?? "—" }
     func surfaceSymbol(_ id: SurfaceID?) -> String { id.flatMap { db.registry.surface($0)?.symbol } ?? "questionmark.app" }
-    func productName(_ id: ProductID) -> String { db.registry.product(id)?.name ?? id.rawValue }
+    func productName(_ id: ProductID) -> String { db.registry.product(id).map { DisplayText.localized($0.name) } ?? id.rawValue }
     func providerName(_ id: ProviderID) -> String { db.registry.provider(id)?.shortName ?? id.rawValue }
     func providerSymbol(_ id: ProviderID) -> String { db.registry.provider(id)?.symbol ?? "sparkles" }
-    func sourceName(_ id: TelemetrySourceID) -> String { db.registry.source(id)?.name ?? id.rawValue }
+    func sourceName(_ id: TelemetrySourceID) -> String { db.registry.source(id).map { DisplayText.localized($0.name) } ?? id.rawValue }
 
     /// The color that stands for a provider in every chart and legend.
     func providerColor(_ id: ProviderID) -> Color {
@@ -24,7 +24,7 @@ extension AppModel {
     func toolName(_ id: ProviderID) -> String {
         let recorded = Set(filterOptions.products)
         let first = db.registry.products.first { $0.provider == id && recorded.contains($0.id) }
-        return first?.name ?? providerName(id)
+        return first.map { DisplayText.localized($0.name) } ?? providerName(id)
     }
 
     /// True when a pool has no figure yet because the user can still switch on the way to get one.
@@ -88,7 +88,7 @@ struct ScopeBar: View {
                            .map { ($0, model.productName($0)) })
             FilterMenu(title: "Account", selection: $model.scope.accounts,
                        items: options.accounts.filter { providers.isEmpty || providers.contains($0.provider) }
-                           .map { ($0.id, "\(model.providerName($0.provider)) · \($0.label)") })
+                           .map { ($0.id, "\(model.providerName($0.provider)) · \(DisplayText.localized($0.label))") })
             FilterMenu(title: "Surface", selection: $model.scope.surfaces,
                        items: options.surfaces.map { ($0, model.surfaceName($0)) })
             if model.scope.isActive {

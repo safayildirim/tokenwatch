@@ -11,15 +11,15 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     public var id: String { rawValue }
     var title: String {
         switch self {
-        case .overview: "Overview"
-        case .trends: "Trends"
-        case .sessions: "Sessions"
-        case .projects: "Projects"
-        case .models: "Models"
-        case .cost: "Cost"
-        case .quota: "Limits"
-        case .providers: "Providers"
-        case .diagnostics: "Diagnostics"
+        case .overview: String(localized: "Overview")
+        case .trends: String(localized: "Trends")
+        case .sessions: String(localized: "Sessions")
+        case .projects: String(localized: "Projects")
+        case .models: String(localized: "Models")
+        case .cost: String(localized: "Cost")
+        case .quota: String(localized: "Limits")
+        case .providers: String(localized: "Providers")
+        case .diagnostics: String(localized: "Diagnostics")
         }
     }
     var symbol: String {
@@ -523,19 +523,26 @@ public final class AppModel {
             guard !pools.isEmpty else { continue }
             lines.append(provider.shortName)
             for pool in pools {
-                let account = pool.pool.accountLabel == "Unassigned" ? "" : " (\(pool.pool.accountLabel))"
+                let name = pool.pool.name
+                let account = pool.pool.accountLabel
+                let label = account == "Unassigned" ? name : String(localized: "\(name) (\(account))")
                 let shown = pool.windows.filter { $0.reading != nil }
-                if shown.isEmpty { lines.append("  \(pool.pool.name)\(account): no data yet"); continue }
+                if shown.isEmpty { lines.append("  " + String(localized: "\(label): no data yet")); continue }
                 for w in shown {
+                    let window = w.displayName.lowercased()
                     if w.isDisplayable, let r = w.reading {
-                        lines.append("  \(pool.pool.name)\(account), \(w.displayName.lowercased()): \(Int((w.utilizationPercent ?? 0).rounded()))% used, updated \(Fmt.relative(r.observedAt))" + (w.freshness == .stale ? " (stale)" : ""))
+                        let pct = Int((w.utilizationPercent ?? 0).rounded())
+                        let ago = Fmt.relative(r.observedAt)
+                        lines.append("  " + (w.freshness == .stale
+                            ? String(localized: "\(label), \(window): \(pct)% used, updated \(ago) (stale)")
+                            : String(localized: "\(label), \(window): \(pct)% used, updated \(ago)")))
                     } else {
-                        lines.append("  \(pool.pool.name)\(account), \(w.displayName.lowercased()): unavailable")
+                        lines.append("  " + String(localized: "\(label), \(window): unavailable"))
                     }
                 }
             }
         }
-        if lines.count == 1 { lines.append("No quota figures reported yet") }
+        if lines.count == 1 { lines.append(String(localized: "No quota figures reported yet")) }
         return lines.joined(separator: "\n")
     }
 
@@ -560,12 +567,15 @@ public final class AppModel {
             let shown = quotaStates.filter(\.isDisplayable)
             guard let top = shown.max(by: { ($0.utilizationPercent ?? 0) < ($1.utilizationPercent ?? 0) }) else { return MenuBarTitle(text: "", tooltip: tip) }
             let name = providers.first { $0.id == top.pool.key.provider }?.shortName ?? top.pool.key.provider.rawValue
+            let poolName = top.pool.name
+            let window = top.displayName.lowercased()
             return MenuBarTitle(text: Self.percentText(top),
-                                tooltip: tip + "\nHighest: \(name), \(top.pool.name), \(top.displayName.lowercased())")
+                                tooltip: tip + "\n" + String(localized: "Highest: \(name), \(poolName), \(window)"))
         case .activeSessions:
             let lines = providers.compactMap { p in activeByProvider[p.id].map { "  \(p.shortName): \($0)" } }
             return MenuBarTitle(text: activeSessionCount > 0 ? "\(activeSessionCount)" : "",
-                                tooltip: tip + "\nActive sessions: \(activeSessionCount)" + (lines.isEmpty ? "" : "\n" + lines.joined(separator: "\n")))
+                                tooltip: tip + "\n" + String(localized: "Active sessions: \(activeSessionCount)")
+                                    + (lines.isEmpty ? "" : "\n" + lines.joined(separator: "\n")))
         }
     }
 
@@ -631,10 +641,10 @@ public enum LoginItem {
 
     public static var statusDescription: String {
         switch status {
-        case .enabled: "Enabled"
-        case .notRegistered, .notFound: "Not enabled"
-        case .requiresApproval: "Waiting for approval in System Settings > General > Login Items"
-        @unknown default: "Unknown"
+        case .enabled: String(localized: "Enabled")
+        case .notRegistered, .notFound: String(localized: "Not enabled")
+        case .requiresApproval: String(localized: "Waiting for approval in System Settings > General > Login Items")
+        @unknown default: String(localized: "Unknown")
         }
     }
 }

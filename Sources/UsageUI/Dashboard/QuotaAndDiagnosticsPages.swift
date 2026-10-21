@@ -61,7 +61,7 @@ struct QuotaPage: View {
                                 Label(product.name, systemImage: "eye.slash").font(.callout.weight(.medium))
                                 ProviderChip(provider: product.provider)
                             }
-                            Text(product.observability).font(.caption).foregroundStyle(.secondary)
+                            Text(DisplayText.localized(product.observability)).font(.caption).foregroundStyle(.secondary)
                             if let pool = registry.pools(of: product.id).first, pool.products.count > 1 || !pool.isObservable {
                                 Text(pool.note).font(.caption).foregroundStyle(.secondary)
                             }

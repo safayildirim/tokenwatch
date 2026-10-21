@@ -38,7 +38,7 @@ public enum Fmt {
 
     /// Formats an API-equivalent cost. A trailing "+" marks a lower bound caused by unpriced models.
     public static func cost(_ c: EstimatedCost, showPartial: Bool = true) -> String {
-        if c.picoUSD == 0 && c.unpricedTokens > 0 { return "unpriced" }
+        if c.picoUSD == 0 && c.unpricedTokens > 0 { return String(localized: "unpriced") }
         let usd = c.usdDouble
         let text: String
         switch usd {
@@ -57,18 +57,22 @@ public enum Fmt {
     public static func duration(_ t: TimeInterval) -> String {
         let s = Int(max(0, t).rounded())
         let d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60
-        if d > 0 { return h > 0 ? "\(d)d \(h)h" : "\(d)d" }
-        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
-        if m > 0 { return "\(m)m" }
-        return "\(s)s"
+        if d > 0 { return h > 0 ? String(localized: "\(d)d \(h)h") : String(localized: "\(d)d") }
+        if h > 0 { return m > 0 ? String(localized: "\(h)h \(m)m") : String(localized: "\(h)h") }
+        if m > 0 { return String(localized: "\(m)m") }
+        return String(localized: "\(s)s")
     }
 
     public static func relative(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "—" }
         let age = now.timeIntervalSince(date)
-        if age < 45 { return "just now" }
-        if age < 0 { return "in " + duration(-age) }
-        return duration(age) + " ago"
+        if age < 45 { return String(localized: "just now") }
+        if age < 0 {
+            let wait = duration(-age)
+            return String(localized: "in \(wait)")
+        }
+        let span = duration(age)
+        return String(localized: "\(span) ago")
     }
 
     public static func dateTime(_ date: Date?) -> String {

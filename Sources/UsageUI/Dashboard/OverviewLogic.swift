@@ -8,44 +8,97 @@ enum OverviewPeriod: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .today: "Today"
-        case .week: "7 Days"
-        case .month: "30 Days"
+        case .today: String(localized: "Today")
+        case .week: String(localized: "7 Days")
+        case .month: String(localized: "30 Days")
         }
     }
 
     /// The heading of the summary tiles, and the period line of the project details.
     var title: String {
         switch self {
-        case .today: "Today so far"
-        case .week: "Last 7 days"
-        case .month: "Last 30 days"
+        case .today: String(localized: "Today so far")
+        case .week: String(localized: "Last 7 days")
+        case .month: String(localized: "Last 30 days")
         }
     }
 
-    /// The period as it reads inside a sentence, such as "New tokens today so far."
-    var phrase: String {
-        switch self {
-        case .today: "today so far"
-        case .week: "in the last 7 days"
-        case .month: "in the last 30 days"
-        }
-    }
-
-    /// What the period is compared with.
-    var comparison: String {
-        switch self {
-        case .today: "yesterday by this time"
-        case .week: "the 7 days before"
-        case .month: "the 30 days before"
-        }
-    }
+    // The sentences that mention the period are written out whole for each period, because the period's place in the
+    // sentence differs between languages.
 
     var chartSubtitle: String {
         switch self {
-        case .today: "New tokens per hour, today."
-        case .week: "New tokens per day, last 7 days."
-        case .month: "New tokens per day, last 30 days."
+        case .today: String(localized: "New tokens per hour, today.")
+        case .week: String(localized: "New tokens per day, last 7 days.")
+        case .month: String(localized: "New tokens per day, last 30 days.")
+        }
+    }
+
+    /// The subtitle of a list of new tokens, such as "New tokens today so far."
+    var newTokensLine: String {
+        switch self {
+        case .today: String(localized: "New tokens today so far.")
+        case .week: String(localized: "New tokens in the last 7 days.")
+        case .month: String(localized: "New tokens in the last 30 days.")
+        }
+    }
+
+    var newTokensClickProjectLine: String {
+        switch self {
+        case .today: String(localized: "New tokens today so far. Click a project for details.")
+        case .week: String(localized: "New tokens in the last 7 days. Click a project for details.")
+        case .month: String(localized: "New tokens in the last 30 days. Click a project for details.")
+        }
+    }
+
+    /// A count of new tokens in the period, such as "2.4M new tokens today so far."
+    func newTokensTotal(_ total: String) -> String {
+        switch self {
+        case .today: String(localized: "\(total) new tokens today so far.")
+        case .week: String(localized: "\(total) new tokens in the last 7 days.")
+        case .month: String(localized: "\(total) new tokens in the last 30 days.")
+        }
+    }
+
+    /// A count of all processed tokens in the period, cache reads included.
+    func processedTotal(_ total: String) -> String {
+        switch self {
+        case .today: String(localized: "\(total) tokens processed today so far, cache reads included.")
+        case .week: String(localized: "\(total) tokens processed in the last 7 days, cache reads included.")
+        case .month: String(localized: "\(total) tokens processed in the last 30 days, cache reads included.")
+        }
+    }
+
+    var noTokensLine: String {
+        switch self {
+        case .today: String(localized: "No tokens today so far.")
+        case .week: String(localized: "No tokens in the last 7 days.")
+        case .month: String(localized: "No tokens in the last 30 days.")
+        }
+    }
+
+    var nothingLine: String {
+        switch self {
+        case .today: String(localized: "Nothing today so far.")
+        case .week: String(localized: "Nothing in the last 7 days.")
+        case .month: String(localized: "Nothing in the last 30 days.")
+        }
+    }
+
+    var noSessionsLine: String {
+        switch self {
+        case .today: String(localized: "No sessions today so far.")
+        case .week: String(localized: "No sessions in the last 7 days.")
+        case .month: String(localized: "No sessions in the last 30 days.")
+        }
+    }
+
+    /// Which tools worked on a project in the period, such as "Used with Claude Code and Codex today so far."
+    func usedWith(_ tools: String) -> String {
+        switch self {
+        case .today: String(localized: "Used with \(tools) today so far.")
+        case .week: String(localized: "Used with \(tools) in the last 7 days.")
+        case .month: String(localized: "Used with \(tools) in the last 30 days.")
         }
     }
 
@@ -131,6 +184,19 @@ enum OverviewLogic {
         return out
     }
 
+    /// Names joined into one phrase, such as "Claude Code and Codex".
+    static func list(_ names: [String]) -> String {
+        guard let last = names.last else { return "" }
+        guard names.count > 1 else { return last }
+        let head = names.dropLast().joined(separator: ", ")
+        return String(localized: "\(head) and \(last)")
+    }
+
+    /// A number of sessions, such as "1 session" or "12 sessions".
+    static func sessionCount(_ n: Int) -> String {
+        n == 1 ? String(localized: "\(n) session") : String(localized: "\(n) sessions")
+    }
+
     /// The bar that is selected when the user has not picked one: the current hour or day.
     static func defaultSelection(_ buckets: [OverviewBucket]) -> Int {
         buckets.lastIndex { !$0.isFuture } ?? max(0, buckets.count - 1)
@@ -148,12 +214,32 @@ enum OverviewLogic {
     /// How the new tokens of the period compare with the period before.
     static func changeText(current: Int64, previous: Int64, period: OverviewPeriod) -> String {
         guard previous > 0 else {
-            return current > 0 ? "Nothing \(period.comparison) to compare with." : "No usage \(period.comparison) either."
+            switch (period, current > 0) {
+            case (.today, true): return String(localized: "Nothing yesterday by this time to compare with.")
+            case (.week, true): return String(localized: "Nothing the 7 days before to compare with.")
+            case (.month, true): return String(localized: "Nothing the 30 days before to compare with.")
+            case (.today, false): return String(localized: "No usage yesterday by this time either.")
+            case (.week, false): return String(localized: "No usage the 7 days before either.")
+            case (.month, false): return String(localized: "No usage the 30 days before either.")
+            }
         }
         let change = Double(current) / Double(previous) - 1
-        if abs(change) < 0.05 { return "About the same as \(period.comparison)." }
+        if abs(change) < 0.05 {
+            switch period {
+            case .today: return String(localized: "About the same as yesterday by this time.")
+            case .week: return String(localized: "About the same as the 7 days before.")
+            case .month: return String(localized: "About the same as the 30 days before.")
+            }
+        }
         let pct = Int((abs(change) * 100).rounded())
-        return change > 0 ? "↑ \(pct)% more than \(period.comparison)." : "↓ \(pct)% less than \(period.comparison)."
+        switch (period, change > 0) {
+        case (.today, true): return String(localized: "↑ \(pct)% more than yesterday by this time.")
+        case (.week, true): return String(localized: "↑ \(pct)% more than the 7 days before.")
+        case (.month, true): return String(localized: "↑ \(pct)% more than the 30 days before.")
+        case (.today, false): return String(localized: "↓ \(pct)% less than yesterday by this time.")
+        case (.week, false): return String(localized: "↓ \(pct)% less than the 7 days before.")
+        case (.month, false): return String(localized: "↓ \(pct)% less than the 30 days before.")
+        }
     }
 
     /// The label under a bar. Today labels every third hour, 7 days label every day, and 30 days every fifth day
@@ -178,26 +264,29 @@ enum OverviewLogic {
         } else {
             text = b.start.formatted(.dateTime.weekday(.wide).day().month(.wide))
         }
-        return b.isCurrent ? text + ", so far" : text
+        return b.isCurrent ? String(localized: "\(text), so far") : text
     }
 
     /// When something last happened, in words: "Today 16:12", "Yesterday", "Friday" or a date.
     static func lastActive(_ date: Date?, now: Date, calendar: Calendar) -> String {
-        guard let date else { return "Unknown" }
-        if calendar.isDate(date, inSameDayAs: now) { return "Today " + date.formatted(date: .omitted, time: .shortened) }
-        if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: y) { return "Yesterday" }
+        guard let date else { return String(localized: "Unknown") }
+        if calendar.isDate(date, inSameDayAs: now) {
+            let time = date.formatted(date: .omitted, time: .shortened)
+            return String(localized: "Today \(time)")
+        }
+        if let y = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: y) { return String(localized: "Yesterday") }
         if now.timeIntervalSince(date) < 6 * 86_400 { return date.formatted(.dateTime.weekday(.wide)) }
-        if now.timeIntervalSince(date) < 13 * 86_400 { return "Last week" }
+        if now.timeIntervalSince(date) < 13 * 86_400 { return String(localized: "Last week") }
         return date.formatted(date: .abbreviated, time: .omitted)
     }
 
     /// A moment as it reads after "Resets": "at 18:00", "tomorrow at 09:10" or "on Friday at 12:00".
     static func clock(_ date: Date, now: Date, calendar: Calendar) -> String {
         let time = date.formatted(date: .omitted, time: .shortened)
-        if calendar.isDate(date, inSameDayAs: now) { return "at " + time }
-        if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: t) { return "tomorrow at " + time }
-        if date.timeIntervalSince(now) < 6 * 86_400 { return "on " + date.formatted(.dateTime.weekday(.wide)) + " at " + time }
-        return "on " + date.formatted(date: .abbreviated, time: .omitted) + " at " + time
+        if calendar.isDate(date, inSameDayAs: now) { return String(localized: "at \(time)") }
+        if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: t) { return String(localized: "tomorrow at \(time)") }
+        let day = date.timeIntervalSince(now) < 6 * 86_400 ? date.formatted(.dateTime.weekday(.wide)) : date.formatted(date: .abbreviated, time: .omitted)
+        return String(localized: "on \(day) at \(time)")
     }
 }
 
@@ -222,11 +311,11 @@ struct WindowOutlook: Equatable {
                 if toFull < remaining { runsOutAt = now.addingTimeInterval(toFull) }
             }
         }
-        if used >= 100 { return WindowOutlook(level: .critical, status: "Limit reached", runsOutAt: nil) }
-        if runsOutAt != nil { return WindowOutlook(level: .critical, status: "Will run out before it resets", runsOutAt: runsOutAt) }
-        if used >= 90 { return WindowOutlook(level: .critical, status: "Near the limit", runsOutAt: nil) }
-        if used >= 75 { return WindowOutlook(level: .warning, status: "Getting close", runsOutAt: nil) }
-        return WindowOutlook(level: .good, status: "Plenty left", runsOutAt: nil)
+        if used >= 100 { return WindowOutlook(level: .critical, status: String(localized: "Limit reached"), runsOutAt: nil) }
+        if runsOutAt != nil { return WindowOutlook(level: .critical, status: String(localized: "Will run out before it resets"), runsOutAt: runsOutAt) }
+        if used >= 90 { return WindowOutlook(level: .critical, status: String(localized: "Near the limit"), runsOutAt: nil) }
+        if used >= 75 { return WindowOutlook(level: .warning, status: String(localized: "Getting close"), runsOutAt: nil) }
+        return WindowOutlook(level: .good, status: String(localized: "Plenty left"), runsOutAt: nil)
     }
 }
 
@@ -234,9 +323,12 @@ extension Fmt {
     /// A duration as it reads in a sentence, such as "1 h 42 min" or "3 d 5 h".
     static func spokenDuration(_ t: TimeInterval) -> String {
         let min = Int((max(0, t) / 60).rounded())
-        if min < 60 { return "\(min) min" }
-        if min < 1440 { let h = min / 60, m = min % 60; return m > 0 ? "\(h) h \(m) min" : "\(h) h" }
+        if min < 60 { return String(localized: "\(min) min") }
+        if min < 1440 {
+            let h = min / 60, m = min % 60
+            return m > 0 ? String(localized: "\(h) h \(m) min") : String(localized: "\(h) h")
+        }
         let d = min / 1440, h = (min % 1440) / 60
-        return h > 0 ? "\(d) d \(h) h" : "\(d) d"
+        return h > 0 ? String(localized: "\(d) d \(h) h") : String(localized: "\(d) d")
     }
 }

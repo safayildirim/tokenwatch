@@ -528,32 +528,25 @@ private struct ActivityBar: View {
             let v = bucket.fresh[p] ?? 0
             return v > 0 ? (p, v) : nil
         }
+        let frame = UnevenRoundedRectangle(topLeadingRadius: 5, topTrailingRadius: 5)
         Button(action: action) {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                // The selection outlines the bar itself, not the column it stands in.
-                Group {
-                    if segments.isEmpty {
-                        RoundedRectangle(cornerRadius: 2).fill(Palette.track).frame(height: 3)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(segments, id: \.0) { s in
-                                Rectangle().fill(colors[s.0] ?? Palette.other)
-                                    .frame(height: max(1, height * CGFloat(s.1) / CGFloat(max(1, top))))
-                            }
+                if segments.isEmpty {
+                    RoundedRectangle(cornerRadius: 2).fill(Palette.track).frame(height: 3)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(segments, id: \.0) { s in
+                            Rectangle().fill(colors[s.0] ?? Palette.other)
+                                .frame(height: max(1, height * CGFloat(s.1) / CGFloat(max(1, top))))
                         }
-                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 3, topTrailingRadius: 3))
                     }
-                }
-                .overlay {
-                    if selected {
-                        UnevenRoundedRectangle(topLeadingRadius: 4, topTrailingRadius: 4)
-                            .stroke(Color.accentColor, lineWidth: 2)
-                            .padding(.horizontal, -2).padding(.top, -2)
-                    }
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 3, topTrailingRadius: 3))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(frame.fill(selected ? Color.accentColor.opacity(0.12) : .clear))
+            .overlay { if selected { frame.stroke(Color.accentColor, lineWidth: 2).padding(-1) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

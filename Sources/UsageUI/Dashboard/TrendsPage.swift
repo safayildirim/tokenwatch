@@ -409,32 +409,25 @@ private struct TrendChart: View {
             let v = b.values[s.id] ?? 0
             return v > 0 ? (s, v) : nil
         }
+        let frame = UnevenRoundedRectangle(topLeadingRadius: 5, topTrailingRadius: 5)
         return Button { onSelect(b.index) } label: {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                // The selection outlines the bar itself, not the column it stands in.
-                Group {
-                    if segments.isEmpty {
-                        RoundedRectangle(cornerRadius: 2).fill(Palette.track).frame(height: 3)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(segments, id: \.0.id) { s in
-                                Rectangle().fill(colors[s.0.color] ?? Palette.other)
-                                    .frame(height: max(1, plotHeight * CGFloat(s.1 / max(top, .leastNonzeroMagnitude))))
-                            }
+                if segments.isEmpty {
+                    RoundedRectangle(cornerRadius: 2).fill(Palette.track).frame(height: 3)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(segments, id: \.0.id) { s in
+                            Rectangle().fill(colors[s.0.color] ?? Palette.other)
+                                .frame(height: max(1, plotHeight * CGFloat(s.1 / max(top, .leastNonzeroMagnitude))))
                         }
-                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 3, topTrailingRadius: 3))
                     }
-                }
-                .overlay {
-                    if on {
-                        UnevenRoundedRectangle(topLeadingRadius: 4, topTrailingRadius: 4)
-                            .stroke(Color.accentColor, lineWidth: 2)
-                            .padding(.horizontal, -2).padding(.top, -2)
-                    }
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 3, topTrailingRadius: 3))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(frame.fill(on ? Color.accentColor.opacity(0.12) : .clear))
+            .overlay { if on { frame.stroke(Color.accentColor, lineWidth: 2).padding(-1) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -12,6 +12,18 @@ public struct SettingsView: View {
     private enum Tab: String, CaseIterable, Identifiable {
         case general = "General", quota = "Quota", notifications = "Notifications", data = "Data", export = "Export", cost = "Cost", about = "About"
         var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .general: String(localized: "General")
+            case .quota: String(localized: "Quota")
+            case .notifications: String(localized: "Notifications")
+            case .data: String(localized: "Data")
+            case .export: String(localized: "Export")
+            case .cost: String(localized: "Cost")
+            case .about: String(localized: "About")
+            }
+        }
     }
 
     /// The pages are chosen with a segmented control instead of a tab view. A tab view puts its tabs into the window's
@@ -19,7 +31,7 @@ public struct SettingsView: View {
     public var body: some View {
         VStack(spacing: 0) {
             Picker("Settings page", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(Tab.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -85,6 +97,7 @@ private struct GeneralSettings: View {
                 Picker("Theme", selection: Binding(get: { model.settings.appearance }, set: { v in model.updateSettings { $0.appearance = v } })) {
                     Text("Match system").tag(AppearanceMode.system); Text("Light").tag(AppearanceMode.light); Text("Dark").tag(AppearanceMode.dark)
                 }.pickerStyle(.segmented)
+                LanguagePicker()
             }
             Section("Session status") {
                 Stepper("Active if seen within \(model.settings.activeWithinSeconds) seconds",
@@ -284,9 +297,12 @@ private struct ExportSettings: View {
                 let lower = interval.from, upper = interval.to.map { $0.addingTimeInterval(-0.001) }
                 let r: ClosedRange<Date>? = (lower != nil || upper != nil) ? (lower ?? Date(timeIntervalSince1970: 0))...(upper ?? Date()) : nil
                 let result = try ExportService(db: db).export(kind: k, format: f, range: r, to: url, filter: scope)
-                message = "Exported \(Fmt.grouped(Int64(result.rows))) rows."
+                message = String(localized: "Exported \(Fmt.grouped(Int64(result.rows))) rows.")
                 written = result.url
-            } catch { message = "Export failed: \(error)" }
+            } catch {
+                let reason = String(describing: error)
+                message = String(localized: "Export failed: \(reason)")
+            }
             await MainActor.run { status = message; lastURL = written; running = false }
         }
     }
@@ -314,7 +330,7 @@ private struct CostSettings: View {
                 Picker("Provider", selection: $provider) { ForEach(model.providers, id: \.id) { Text($0.name).tag($0.id) } }
                 Picker("Model", selection: $modelKey) {
                     Text("Type a model name below").tag("")
-                    ForEach(unpriced.filter { $0.0 == provider }, id: \.1) { Text($0.1 + " (no price yet)").tag($0.1) }
+                    ForEach(unpriced.filter { $0.0 == provider }, id: \.1) { Text("\($0.1) (no price yet)").tag($0.1) }
                 }
                 TextField("Model key", text: $modelKey)
                 TextField("Input, US$ per million tokens", text: $input)
@@ -354,10 +370,13 @@ private struct CostSettings: View {
                              cacheRead: cached, cache5m: i, cache1h: i, note: "Added by you.")
         do {
             try PricingStore.upsertUserRate(model.db, rate)
-            message = "Saved."
+            message = String(localized: "Saved.")
             input = ""; cachedInput = ""; output = ""; modelKey = ""
             model.requestRefresh()
-        } catch { message = "Could not save: \(error)" }
+        } catch {
+            let reason = String(describing: error)
+            message = String(localized: "Could not save: \(reason)")
+        }
         Task { await load() }
     }
 
@@ -375,10 +394,13 @@ private struct CostSettings: View {
                     if r.text(2) != "standard" { name += " (\(r.text(2)))" }
                     if r.int(3) > 0 || r.intOrNil(4) != nil { name += r.intOrNil(4) == nil ? " (> \(Fmt.tokens(r.int(3) - 1)))" : " (≤ \(Fmt.tokens(r.int(4) - 1)))" }
                     // A card that starts later than the epoch says from when it applies, and where its price comes from.
-                    if r.int(10) > 0 { name += " from " + Self.day(r.int(10)) }
+                    if r.int(10) > 0 {
+                        let day = Self.day(r.int(10))
+                        name += " " + String(localized: "from \(day)")
+                    }
                     switch r.text(11) {
-                    case "derived": name += " · derived"
-                    case "user": name += " · yours"
+                    case "derived": name += " · " + String(localized: "derived")
+                    case "user": name += " · " + String(localized: "yours")
                     default: break
                     }
                     return (name, r.text(1), usd(5), usd(6), usd(7), usd(8), usd(9))
@@ -413,5 +435,26 @@ private struct AboutSettings: View {
             }.foregroundStyle(.secondary)
         }
         .padding(30).frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Chooses the language of the interface. A change is saved at once and shown after a restart, which the picker offers.
+struct LanguagePicker: View {
+    @State private var choice = AppLanguage.saved
+
+    var body: some View {
+        Picker("Language", selection: $choice) {
+            ForEach(AppLanguage.allCases) { language in
+                Text(language == .system ? "\(language.label) (\(AppLanguage.systemChoice.label))" : language.label).tag(language)
+            }
+        }
+        .onChange(of: choice) { _, new in new.save() }
+        if choice.resolved != AppLanguage.current {
+            HStack(spacing: 8) {
+                Text("Tokenwatch shows the new language after it restarts.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Restart Now") { AppLanguage.relaunch() }
+            }
+        }
     }
 }

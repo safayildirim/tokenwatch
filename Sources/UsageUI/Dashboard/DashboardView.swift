@@ -83,11 +83,11 @@ public struct DashboardView: View {
     }
 
     private func collectingText(_ snap: CollectorSnapshot) -> String {
-        if snap.sources.contains(where: { $0.state != .ok }) { return "Collection issue" }
-        guard let last = model.latestActivity else { return "Collecting" }
+        if snap.sources.contains(where: { $0.state != .ok }) { return String(localized: "Collection issue") }
+        guard let last = model.latestActivity else { return String(localized: "Collecting") }
         let time = Calendar.current.isDateInToday(last) ? last.formatted(date: .omitted, time: .shortened)
             : last.formatted(date: .abbreviated, time: .shortened)
-        return "Collecting · last file read at \(time)"
+        return String(localized: "Collecting · last file read at \(time)")
     }
 }
 
@@ -103,12 +103,16 @@ struct UpdatedLabel: View {
     }
 
     private func text(now: Date) -> String {
-        if model.isCheckingNow { return "Checking for new usage…" }
+        if model.isCheckingNow { return String(localized: "Checking for new usage…") }
         guard let at = model.lastUpdatedAt else { return "" }
         let age = now.timeIntervalSince(at)
-        if age < 60 { return "Updated just now" }
-        if age < 3600 { return "Updated \(Int(age / 60)) min ago" }
-        return "Updated " + Fmt.relative(at, now: now)
+        if age < 60 { return String(localized: "Updated just now") }
+        if age < 3600 {
+            let minutes = Int(age / 60)
+            return String(localized: "Updated \(minutes) min ago")
+        }
+        let ago = Fmt.relative(at, now: now)
+        return String(localized: "Updated \(ago)")
     }
 }
 
@@ -131,14 +135,15 @@ struct NoDataNotice: View {
     var body: some View {
         let snap = model.collectorSnapshot
         if !snap.sources.isEmpty, snap.sources.allSatisfy({ $0.state == .notFound }) {
-            EmptyState(symbol: "questionmark.folder", title: "No supported tool was found",
-                       message: "None of the data folders exist yet (" + snap.sources.map(\.displayName).joined(separator: "; ") + "). Usage appears here automatically once you use one of them.")
+            let folders = snap.sources.map(\.displayName).joined(separator: "; ")
+            EmptyState(symbol: "questionmark.folder", title: String(localized: "No supported tool was found"),
+                       message: String(localized: "None of the data folders exist yet (\(folders)). Usage appears here automatically once you use one of them."))
         } else if snap.isSyncing {
-            EmptyState(symbol: "arrow.down.circle", title: "Importing your history",
-                       message: "Existing sessions are being read. This page fills in as the import progresses.")
+            EmptyState(symbol: "arrow.down.circle", title: String(localized: "Importing your history"),
+                       message: String(localized: "Existing sessions are being read. This page fills in as the import progresses."))
         } else {
-            EmptyState(symbol: "tray", title: "No usage recorded in this period",
-                       message: "Nothing matches the current filters. Widen the date range or clear the filters.")
+            EmptyState(symbol: "tray", title: String(localized: "No usage recorded in this period"),
+                       message: String(localized: "Nothing matches the current filters. Widen the date range or clear the filters."))
         }
     }
 }

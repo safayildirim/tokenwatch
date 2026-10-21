@@ -13,11 +13,33 @@ enum TrendMetric: String, CaseIterable, Identifiable {
     case byProject = "By project"
     case cost = "API-equivalent cost"
     var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .total: String(localized: "Total tokens")
+        case .inputOutput: String(localized: "Input vs output")
+        case .cache: String(localized: "Cache read vs creation")
+        case .categories: String(localized: "All token categories")
+        case .sessions: String(localized: "Sessions")
+        case .requests: String(localized: "Requests")
+        case .byModel: String(localized: "By model")
+        case .byProject: String(localized: "By project")
+        case .cost: String(localized: "API-equivalent cost")
+        }
+    }
 }
 
 enum TrendMeasure: String, CaseIterable, Identifiable {
     case processed = "Processed tokens", fresh = "New tokens", cost = "Estimated cost"
     var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .processed: String(localized: "Processed tokens")
+        case .fresh: String(localized: "New tokens")
+        case .cost: String(localized: "Estimated cost")
+        }
+    }
 }
 
 private struct Datum: Identifiable {
@@ -62,7 +84,7 @@ struct TrendsPage: View {
         PageScroll {
             controls
             summary
-            Card(metric.rawValue, subtitle: subtitle) {
+            Card(metric.label, subtitle: subtitle) {
                 if loading && points.isEmpty { ProgressView().frame(maxWidth: .infinity, minHeight: 280) }
                 else if points.allSatisfy({ $0.requests == 0 }) && model.hasLoaded { NoDataNotice() }
                 else if showTable { table }
@@ -82,14 +104,14 @@ struct TrendsPage: View {
                 ForEach(Granularity.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented).frame(width: 260).labelsHidden()
-            .help(granularity != effectiveGranularity ? "Hourly resolution is only used for ranges up to 14 days." : "Bucket size")
+            .help(granularity != effectiveGranularity ? String(localized: "Hourly resolution is only used for ranges up to 14 days.") : String(localized: "Bucket size"))
             Picker("Metric", selection: $metric) {
-                ForEach(TrendMetric.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(TrendMetric.allCases) { Text($0.label).tag($0) }
             }
             .frame(width: 210)
             if metric == .byModel || metric == .byProject {
                 Picker("Measure", selection: $measure) {
-                    ForEach(TrendMeasure.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(TrendMeasure.allCases) { Text($0.label).tag($0) }
                 }.frame(width: 220)
             }
             Spacer()
@@ -99,19 +121,19 @@ struct TrendsPage: View {
 
     private var summary: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
-            KPITile(title: "New tokens", value: Fmt.tokens(totals.tokens.freshTokens), detail: "in the selected range")
-            KPITile(title: "Processed tokens", value: Fmt.tokens(totals.tokens.totalProcessed), detail: "including cache reads")
-            KPITile(title: "Requests", value: Fmt.grouped(Int64(totals.requests)), detail: "\(totals.sessions) sessions")
+            KPITile(title: String(localized: "New tokens"), value: Fmt.tokens(totals.tokens.freshTokens), detail: String(localized: "in the selected range"))
+            KPITile(title: String(localized: "Processed tokens"), value: Fmt.tokens(totals.tokens.totalProcessed), detail: String(localized: "including cache reads"))
+            KPITile(title: String(localized: "Requests"), value: Fmt.grouped(Int64(totals.requests)), detail: String(localized: "\(totals.sessions) sessions"))
             if model.settings.showEstimatedCost {
-                KPITile(title: "API-equivalent cost", value: Fmt.cost(totals.cost), detail: "estimate, not a charge")
+                KPITile(title: String(localized: "API-equivalent cost"), value: Fmt.cost(totals.cost), detail: String(localized: "estimate, not a charge"))
             }
         }
     }
 
     private var subtitle: String {
-        var s = "\(effectiveGranularity.label) buckets in your local time zone."
-        if granularity != effectiveGranularity { s += " Hourly view is limited to 14 days; showing days." }
-        return s
+        let s = String(localized: "\(effectiveGranularity.label) buckets in your local time zone.")
+        guard granularity != effectiveGranularity else { return s }
+        return s + " " + String(localized: "Hourly view is limited to 14 days; showing days.")
     }
 
     // MARK: Data shaping
@@ -124,27 +146,34 @@ struct TrendsPage: View {
         }
         switch metric {
         case .total:
-            let (d, s) = tokenSeries([("Processed tokens", Palette.series[0], { $0.totalProcessed })])
+            let (d, s) = tokenSeries([(String(localized: "Processed tokens"), Palette.series[0], { $0.totalProcessed })])
             return (d, s, true)
         case .inputOutput:
-            let (d, s) = tokenSeries([("Input (all)", Palette.uncachedInput, { $0.logicalInput }), ("Output", Palette.output, { $0.output })])
+            let (d, s) = tokenSeries([(String(localized: "Input (all)"), Palette.uncachedInput, { $0.logicalInput }),
+                                      (String(localized: "Output"), Palette.output, { $0.output })])
             return (d, s, false)
         case .cache:
-            let (d, s) = tokenSeries([("Cache read", Palette.cacheRead, { $0.cacheRead }), ("Cache creation", Palette.cacheWrite, { $0.cacheCreation })])
+            let (d, s) = tokenSeries([(String(localized: "Cache read"), Palette.cacheRead, { $0.cacheRead }),
+                                      (String(localized: "Cache creation"), Palette.cacheWrite, { $0.cacheCreation })])
             return (d, s, false)
         case .categories:
-            let (d, s) = tokenSeries([("Uncached input", Palette.uncachedInput, { $0.uncachedInput }), ("Output", Palette.output, { $0.output }),
-                                      ("Cache read", Palette.cacheRead, { $0.cacheRead }), ("Cache creation", Palette.cacheWrite, { $0.cacheCreation })])
+            let (d, s) = tokenSeries([(String(localized: "Uncached input"), Palette.uncachedInput, { $0.uncachedInput }),
+                                      (String(localized: "Output"), Palette.output, { $0.output }),
+                                      (String(localized: "Cache read"), Palette.cacheRead, { $0.cacheRead }),
+                                      (String(localized: "Cache creation"), Palette.cacheWrite, { $0.cacheCreation })])
             return (d, s, false)
         case .requests:
-            return (points.map { Datum(date: $0.start, series: "Requests", value: Double($0.requests)) },
-                    SeriesStyle(names: ["Requests"], colors: [Palette.series[0]]), true)
+            let name = String(localized: "Requests")
+            return (points.map { Datum(date: $0.start, series: name, value: Double($0.requests)) },
+                    SeriesStyle(names: [name], colors: [Palette.series[0]]), true)
         case .sessions:
-            return (sessionCounts.map { Datum(date: $0.start, series: "Sessions", value: Double($0.sessions)) },
-                    SeriesStyle(names: ["Sessions"], colors: [Palette.series[0]]), true)
+            let name = String(localized: "Sessions")
+            return (sessionCounts.map { Datum(date: $0.start, series: name, value: Double($0.sessions)) },
+                    SeriesStyle(names: [name], colors: [Palette.series[0]]), true)
         case .cost:
-            return (points.map { Datum(date: $0.start, series: "Estimated cost (USD)", value: $0.cost.usdDouble) },
-                    SeriesStyle(names: ["Estimated cost (USD)"], colors: [Palette.series[0]]), true)
+            let name = String(localized: "Estimated cost (USD)")
+            return (points.map { Datum(date: $0.start, series: name, value: $0.cost.usdDouble) },
+                    SeriesStyle(names: [name], colors: [Palette.series[0]]), true)
         case .byModel, .byProject:
             let source = metric == .byModel ? modelPoints : projectPoints
             func value(_ p: SeriesPoint) -> Double {
@@ -168,9 +197,10 @@ struct TrendsPage: View {
             var names = keep.map { labels[$0] ?? $0 }
             var colors = keep.map { ChartColors.shared.color(for: ($0.isEmpty ? "none" : $0)) }
             if !other.isEmpty {
-                names.append("Other")
+                let otherName = String(localized: "Other")
+                names.append(otherName)
                 colors.append(Palette.other)
-                out += other.map { Datum(date: $0.key, series: "Other", value: $0.value) }
+                out += other.map { Datum(date: $0.key, series: otherName, value: $0.value) }
             }
             return (out, SeriesStyle(names: names, colors: colors), false)
         }
@@ -228,7 +258,7 @@ struct TrendsPage: View {
                 }
             }
             .frame(height: 340)
-            .accessibilityLabel("\(metric.rawValue) chart")
+            .accessibilityLabel("\(metric.label) chart")
             .accessibilityHint("Use the Table switch for an accessible listing of the values.")
         }
     }

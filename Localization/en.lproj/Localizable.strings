@@ -1,0 +1,2 @@
+/* English is the development language: every key is the English text itself, so this table stays empty.
+   It exists so that the app bundle lists English among its localizations. */

@@ -15,7 +15,7 @@ import Foundation
 /// are skipped without being decoded, and nothing from them is stored.
 public struct ClaudeCodeAdapter: SourceAdapter {
     public var sourceID: TelemetrySourceID { .claudeTranscripts }
-    public var displayName: String { "Claude Code (CLI, VS Code, Desktop Code)" }
+    public var displayName: String { String(localized: "Claude Code (CLI, VS Code, Desktop Code)") }
     public let root: URL
 
     public init(root: URL = ClaudeCodeAdapter.defaultRoot) { self.root = CanonicalPath.resolve(root) }
@@ -25,7 +25,7 @@ public struct ClaudeCodeAdapter: SourceAdapter {
     public var watchRoots: [URL] { [root] }
 
     public var coverageNote: String {
-        "Reads local transcripts only. Usage from claude.ai chat, Cowork and other devices is not recorded in these files and is not included."
+        String(localized: "Reads local transcripts only. Usage from claude.ai chat, Cowork and other devices is not recorded in these files and is not included.")
     }
 
     public func discoverFiles() throws -> [SourceFileRef] {

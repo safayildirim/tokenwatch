@@ -47,9 +47,10 @@ public final class AlertEngine: @unchecked Sendable {
 
     /// Names a window for the person reading the notification.
     static func label(_ state: QuotaWindowState) -> String {
-        var text = "\(state.pool.name) \(state.displayName.lowercased())"
-        if state.pool.accountLabel != "Unassigned" { text += " (\(state.pool.accountLabel))" }
-        return text
+        let pool = state.pool.name
+        let window = state.displayName.lowercased()
+        if state.pool.accountLabel != "Unassigned" { return String(localized: "\(pool) \(window) (\(state.pool.accountLabel))") }
+        return String(localized: "\(pool) \(window)")
     }
 
     private func recall(_ id: String) {
@@ -79,8 +80,8 @@ public final class AlertEngine: @unchecked Sendable {
                     if let last = lastCycle[id], last.cycleID != cycle, last.percent >= 50 {
                         let key = "reset:\(id):\(last.cycleID)"
                         if settings.notifyOnReset, markFired(key, kind: .reset, detail: nil) {
-                            out.append(AlertNotification(key: key, kind: .reset, title: "\(label.capitalizedFirst) reset",
-                                                         body: "Your \(label) allowance has reset."))
+                            out.append(AlertNotification(key: key, kind: .reset, title: String(localized: "\(label.capitalizedFirst) reset"),
+                                                         body: String(localized: "Your \(label) allowance has reset.")))
                         }
                     }
                     remember(id, cycle, reading.utilizationPercent)
@@ -93,9 +94,8 @@ public final class AlertEngine: @unchecked Sendable {
                             if settings.enabled {
                                 out.append(AlertNotification(
                                     key: "thr:\(id):\(cycle):\(highest)", kind: .threshold,
-                                    title: "\(label.capitalizedFirst) at \(Int(reading.utilizationPercent.rounded()))%",
-                                    body: "You have used \(Int(reading.utilizationPercent.rounded()))% of your \(label) allowance."
-                                        + " It resets \(Self.relative(reset, now: now))."))
+                                    title: String(localized: "\(label.capitalizedFirst) at \(Int(reading.utilizationPercent.rounded()))%"),
+                                    body: String(localized: "You have used \(Int(reading.utilizationPercent.rounded()))% of your \(label) allowance. It resets \(Self.relative(reset, now: now)).")))
                             }
                         }
                     }
@@ -104,8 +104,8 @@ public final class AlertEngine: @unchecked Sendable {
                 if let last = lastCycle[id], last.cycleID == cycle, last.percent >= 50 {
                     let key = "reset:\(id):\(cycle)"
                     if settings.notifyOnReset, markFired(key, kind: .reset, detail: nil) {
-                        out.append(AlertNotification(key: key, kind: .reset, title: "\(label.capitalizedFirst) reset",
-                                                     body: "Your \(label) allowance has reset."))
+                        out.append(AlertNotification(key: key, kind: .reset, title: String(localized: "\(label.capitalizedFirst) reset"),
+                                                     body: String(localized: "Your \(label) allowance has reset.")))
                     }
                 }
             case .unavailable:
@@ -120,8 +120,8 @@ public final class AlertEngine: @unchecked Sendable {
                    settings.notifyOnStaleData, case .available = state.availability {
                     let key = "stale:\(id):\(Clock.ms(reading.observedAt))"
                     if markFired(key, kind: .staleData, detail: nil) {
-                        out.append(AlertNotification(key: key, kind: .staleData, title: "Quota data is out of date",
-                                                     body: "The \(label) figure has not updated for over an hour, although you are using \(state.pool.name). Quota figures only update while a supported app is making requests."))
+                        out.append(AlertNotification(key: key, kind: .staleData, title: String(localized: "Quota data is out of date"),
+                                                     body: String(localized: "The \(label) figure has not updated for over an hour, although you are using \(state.pool.name). Quota figures only update while a supported app is making requests.")))
                     }
                 }
             }
@@ -133,7 +133,7 @@ public final class AlertEngine: @unchecked Sendable {
                 let key = prefix + String(error.hashValue)
                 if settings.notifyOnCollectionFailure, markFired(key, kind: .collectionFailure, detail: error) {
                     out.append(AlertNotification(key: key, kind: .collectionFailure,
-                                                 title: "Usage collection is failing", body: error))
+                                                 title: String(localized: "Usage collection is failing"), body: error))
                 }
             } else if source.state == .ok {
                 // The source has recovered, so forget the old failure to let a later one be announced again.

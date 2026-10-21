@@ -284,8 +284,8 @@ enum QuotaStateReader {
         func info(_ row: Row) -> QuotaPoolInfo {
             let definition = db.registry.pool(provider: row.provider, key: row.poolKey)
             return QuotaPoolInfo(key: QuotaPoolKey(provider: row.provider, accountID: row.accountID, poolKey: row.poolKey),
-                                 accountLabel: row.accountLabel, name: definition?.name ?? row.poolKey, planType: row.planType,
-                                 products: definition?.products ?? [], note: definition?.note ?? "")
+                                 accountLabel: row.accountLabel, name: definition.map { DisplayText.localized($0.name) } ?? row.poolKey, planType: row.planType,
+                                 products: definition?.products ?? [], note: DisplayText.localized(definition?.note ?? ""))
         }
 
         var out: [QuotaPoolState] = []
@@ -329,8 +329,8 @@ enum QuotaStateReader {
             && !reported.contains("\(definition.provider.rawValue)/\(definition.key)") {
             guard let accountID = unassigned[definition.provider] else { continue }
             let key = QuotaPoolKey(provider: definition.provider, accountID: accountID, poolKey: definition.key)
-            let poolInfo = QuotaPoolInfo(key: key, accountLabel: "Unassigned", name: definition.name,
-                                         products: definition.products, note: definition.note)
+            let poolInfo = QuotaPoolInfo(key: key, accountLabel: "Unassigned", name: DisplayText.localized(definition.name),
+                                         products: definition.products, note: DisplayText.localized(definition.note))
             let windows = definition.standardWindowMinutes.map {
                 QuotaWindowState(pool: poolInfo, windowKey: WindowNaming.key(minutes: $0), windowMinutes: $0, reading: nil,
                                  availability: .unavailable(.noData), freshness: nil, evaluatedAt: now)

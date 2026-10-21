@@ -33,7 +33,7 @@ import Foundation
 ///   as a fallback, and the session is then reported as uncertain.
 public struct CodexAdapter: SourceAdapter {
     public var sourceID: TelemetrySourceID { .codexRollouts }
-    public var displayName: String { "Codex (CLI, Desktop, IDE and ChatGPT Work)" }
+    public var displayName: String { String(localized: "Codex (CLI, Desktop, IDE and ChatGPT Work)") }
     public let home: URL
 
     public init(home: URL = CodexAdapter.defaultHome) { self.home = CanonicalPath.resolve(home) }
@@ -54,7 +54,7 @@ public struct CodexAdapter: SourceAdapter {
     public var watchRoots: [URL] { [sessionsDirectory, archivedDirectory] }
 
     public var coverageNote: String {
-        "Reads local Codex session files only. ChatGPT chat conversations leave no usage records on this Mac, so they are not included."
+        String(localized: "Reads local Codex session files only. ChatGPT chat conversations leave no usage records on this Mac, so they are not included.")
     }
 
     /// Lines refer to earlier lines (the header names the session, and the running totals tell snapshots from new

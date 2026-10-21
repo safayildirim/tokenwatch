@@ -6,9 +6,10 @@ struct ProvidersPage: View {
     @Environment(AppModel.self) private var model
 
     private static let columns: [(Capabilities, String)] = [
-        (.sessions, "Sessions"), (.requestTokens, "Tokens"), (.cacheTokens, "Cache"), (.reasoningTokens, "Reasoning"),
-        (.models, "Models"), (.quotaUtilization, "Quota %"), (.quotaResetTimes, "Reset times"), (.reportedCost, "Own cost"),
-        (.liveSessionState, "Live state"), (.accountIdentity, "Accounts"),
+        (.sessions, String(localized: "Sessions")), (.requestTokens, String(localized: "Tokens")), (.cacheTokens, String(localized: "Cache")),
+        (.reasoningTokens, String(localized: "Reasoning")), (.models, String(localized: "Models")), (.quotaUtilization, String(localized: "Quota %")),
+        (.quotaResetTimes, String(localized: "Reset times")), (.reportedCost, String(localized: "Own cost")),
+        (.liveSessionState, String(localized: "Live state")), (.accountIdentity, String(localized: "Accounts")),
     ]
 
     var body: some View {
@@ -16,7 +17,8 @@ struct ProvidersPage: View {
             Text("Each provider is read through independent data sources. A problem with one never stops another, and a capability marked as missing is never filled in with a guess.")
                 .font(.callout).foregroundStyle(.secondary)
             ForEach(model.providers, id: \.id) { provider in providerCard(provider) }
-            Card("Capability matrix", subtitle: "What each data source reports. A dash means the source does not provide it.") { matrix }
+            Card(String(localized: "Capability matrix"),
+                 subtitle: String(localized: "What each data source reports. A dash means the source does not provide it.")) { matrix }
         }
     }
 
@@ -33,7 +35,7 @@ struct ProvidersPage: View {
                 HStack {
                     Label(provider.name, systemImage: provider.symbol).font(.title3.weight(.semibold))
                     Spacer()
-                    Text(accounts.isEmpty ? "No accounts seen yet" : accounts.count == 1 ? "1 account seen" : "\(accounts.count) accounts seen")
+                    (accounts.isEmpty ? Text("No accounts seen yet") : accounts.count == 1 ? Text("1 account seen") : Text("\(accounts.count) accounts seen"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 6) {
@@ -44,7 +46,7 @@ struct ProvidersPage: View {
                                 .foregroundStyle(product.isObservable ? Palette.good : Color.secondary)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(product.name).font(.callout.weight(.medium))
-                                Text(product.observability).font(.caption).foregroundStyle(.secondary)
+                                Text(DisplayText.localized(product.observability)).font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -62,7 +64,7 @@ struct ProvidersPage: View {
                                     Text(pool.name).font(.callout.weight(.medium))
                                     if !pool.isObservable { Text("not observable").font(.caption2).padding(.horizontal, 5).background(Capsule().fill(Color.secondary.opacity(0.2))) }
                                 }
-                                Text("Used by " + ListFormatter.localizedString(byJoining: pool.products.map(model.productName)) + ". " + pool.note)
+                                Text("Used by \(ListFormatter.localizedString(byJoining: pool.products.map(model.productName))). \(pool.note)")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -82,7 +84,7 @@ struct ProvidersPage: View {
                 Spacer()
                 Text(statusText(for: health, feed: feed)).font(.caption).foregroundStyle(.secondary)
             }
-            Text(source.limitations).font(.caption).foregroundStyle(.secondary)
+            Text(DisplayText.localized(source.limitations)).font(.caption).foregroundStyle(.secondary)
             if let health {
                 Text("\(health.filesKnown) files · last success \(Fmt.relative(health.lastSuccessAt))").font(.caption).foregroundStyle(.secondary)
                 if let error = health.lastError, health.state != .notFound { Text(error).font(.caption).foregroundStyle(Palette.warning) }
@@ -105,16 +107,16 @@ struct ProvidersPage: View {
     private func statusText(for health: SourceHealth?, feed: QuotaFeedStatus?) -> String {
         if let health {
             switch health.state {
-            case .ok: return "Healthy"
-            case .notFound: return "Not found on this Mac"
-            case .degraded: return "Some files failing"
-            case .failing: return "Failing"
+            case .ok: return String(localized: "Healthy")
+            case .notFound: return String(localized: "Not found on this Mac")
+            case .degraded: return String(localized: "Some files failing")
+            case .failing: return String(localized: "Failing")
             }
         }
         if let feed {
-            return feed.observationCount > 0 ? "Receiving · newest \(Fmt.relative(feed.newestObservation))" : "No reports received"
+            return feed.observationCount > 0 ? String(localized: "Receiving · newest \(Fmt.relative(feed.newestObservation))") : String(localized: "No reports received")
         }
-        return "Off"
+        return String(localized: "Off")
     }
 
     // MARK: Matrix
@@ -137,7 +139,7 @@ struct ProvidersPage: View {
                         let has = source.capabilities.contains(column.0)
                         Image(systemName: has ? "checkmark" : "minus")
                             .font(.caption).foregroundStyle(has ? Palette.good : Color.secondary.opacity(0.5))
-                            .accessibilityLabel("\(column.1): \(has ? "yes" : "no")")
+                            .accessibilityLabel(has ? String(localized: "\(column.1): yes") : String(localized: "\(column.1): no"))
                     }
                 }
             }
@@ -145,7 +147,7 @@ struct ProvidersPage: View {
                 GridRow {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(product.name).font(.caption.weight(.medium))
-                        Text(model.providerName(product.provider) + " · no local source").font(.caption2).foregroundStyle(.secondary)
+                        Text("\(model.providerName(product.provider)) · no local source").font(.caption2).foregroundStyle(.secondary)
                     }.gridColumnAlignment(.leading)
                     ForEach(Self.columns, id: \.1) { _ in Image(systemName: "minus").font(.caption).foregroundStyle(Color.secondary.opacity(0.5)) }
                 }

@@ -30,8 +30,8 @@ struct SessionDetailView: View {
                 cacheCard(d)
                 windowsCard(d)
             } else if loaded {
-                EmptyState(symbol: "questionmark.folder", title: "Session not found",
-                           message: "This session is no longer in the database, for example because of the retention setting.")
+                EmptyState(symbol: "questionmark.folder", title: String(localized: "Session not found"),
+                           message: String(localized: "This session is no longer in the database, for example because of the retention setting."))
             } else {
                 ProgressView().frame(maxWidth: .infinity, minHeight: 300)
             }
@@ -57,8 +57,8 @@ struct SessionDetailView: View {
                     GridRow { Text("Session").foregroundStyle(.secondary); Text(r.externalID).monospaced().textSelection(.enabled) }
                     GridRow { Text("Product").foregroundStyle(.secondary); HStack { Text(model.productName(r.productID)); ProviderChip(provider: r.provider) } }
                     GridRow { Text("Where it ran").foregroundStyle(.secondary); Label(model.surfaceName(r.surface), systemImage: model.surfaceSymbol(r.surface)) }
-                    GridRow { Text("Account").foregroundStyle(.secondary); Text(r.accountLabel == "Unassigned" ? "Not identified by the source" : r.accountLabel) }
-                    if r.kind != .main { GridRow { Text("Kind").foregroundStyle(.secondary); Text(r.kind == .review ? "Automatic review thread" : "Started by another session") } }
+                    GridRow { Text("Account").foregroundStyle(.secondary); r.accountLabel == "Unassigned" ? Text("Not identified by the source") : Text(r.accountLabel) }
+                    if r.kind != .main { GridRow { Text("Kind").foregroundStyle(.secondary); r.kind == .review ? Text("Automatic review thread") : Text("Started by another session") } }
                     GridRow { Text("Started").foregroundStyle(.secondary); Text(Fmt.dateTime(r.startedAt)) }
                     GridRow { Text("Last activity").foregroundStyle(.secondary); Text("\(Fmt.dateTime(r.lastActivityAt)) (\(Fmt.relative(r.lastActivityAt)))") }
                     GridRow { Text("Duration").foregroundStyle(.secondary); Text(r.duration.map(Fmt.duration) ?? "—") }
@@ -76,23 +76,26 @@ struct SessionDetailView: View {
 
     private func kpis(_ r: SessionRow) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
-            KPITile(title: "Requests", value: Fmt.grouped(Int64(r.requests)), detail: r.agentRequests > 0 ? "\(r.agentRequests) by sub-agents" : nil)
-            KPITile(title: "Processed tokens", value: Fmt.tokens(r.tokens.totalProcessed), detail: "\(Fmt.tokens(r.tokens.freshTokens)) new")
-            KPITile(title: "Cache hit ratio", value: Fmt.ratio(r.tokens.cacheHitRatio), detail: "cache read ÷ all input")
-            KPITile(title: "Output ÷ input", value: r.tokens.outputToInputRatio.map { String(format: "%.2f%%", $0 * 100) } ?? "—", detail: "output ÷ all input")
+            KPITile(title: String(localized: "Requests"), value: Fmt.grouped(Int64(r.requests)),
+                    detail: r.agentRequests > 0 ? String(localized: "\(r.agentRequests) by sub-agents") : nil)
+            KPITile(title: String(localized: "Processed tokens"), value: Fmt.tokens(r.tokens.totalProcessed),
+                    detail: String(localized: "\(Fmt.tokens(r.tokens.freshTokens)) new"))
+            KPITile(title: String(localized: "Cache hit ratio"), value: Fmt.ratio(r.tokens.cacheHitRatio), detail: String(localized: "cache read ÷ all input"))
+            KPITile(title: String(localized: "Output ÷ input"), value: r.tokens.outputToInputRatio.map { String(format: "%.2f%%", $0 * 100) } ?? "—",
+                    detail: String(localized: "output ÷ all input"))
             if model.settings.showEstimatedCost {
-                KPITile(title: "API-equivalent cost", value: Fmt.cost(r.cost), detail: "estimate from list prices")
+                KPITile(title: String(localized: "API-equivalent cost"), value: Fmt.cost(r.cost), detail: String(localized: "estimate from list prices"))
                 if let reported = r.reportedCostUSD {
-                    KPITile(title: "The tool's own estimate", value: String(format: "$%.2f", reported),
-                            detail: "recorded by \(model.productName(r.productID)), kept separate",
-                            help: "Some tools write their own cost summary into the session. It is shown next to, never mixed with, the estimate above.")
+                    KPITile(title: String(localized: "The tool's own estimate"), value: String(format: "$%.2f", reported),
+                            detail: String(localized: "recorded by \(model.productName(r.productID)), kept separate"),
+                            help: String(localized: "Some tools write their own cost summary into the session. It is shown next to, never mixed with, the estimate above."))
                 }
             }
         }
     }
 
     private func breakdown(_ t: TokenCounts) -> some View {
-        Card("Token breakdown", subtitle: "Exact counts for each category, with the derived totals defined below.") {
+        Card(String(localized: "Token breakdown"), subtitle: String(localized: "Exact counts for each category, with the derived totals defined below.")) {
             VStack(alignment: .leading, spacing: 12) {
                 TokenCompositionBar(tokens: t, includeCacheReads: true)
                 Grid(alignment: .trailing, horizontalSpacing: 24, verticalSpacing: 4) {
@@ -114,7 +117,7 @@ struct SessionDetailView: View {
         }
     }
 
-    private func row(_ name: String, _ value: Int64, _ help: String?) -> some View {
+    private func row(_ name: LocalizedStringKey, _ value: Int64, _ help: LocalizedStringKey?) -> some View {
         GridRow {
             Text(name).gridColumnAlignment(.leading).help(help ?? "")
             Text(Fmt.grouped(value)).monospacedDigit()
@@ -122,7 +125,7 @@ struct SessionDetailView: View {
     }
 
     private func modelsCard(_ d: SessionDetail) -> some View {
-        Card("Models", subtitle: "Share of processed tokens") {
+        Card(String(localized: "Models"), subtitle: String(localized: "Share of processed tokens")) {
             if d.byModel.isEmpty { Text("—").foregroundStyle(.secondary) }
             ForEach(d.byModel) { m in
                 VStack(alignment: .leading, spacing: 3) {
@@ -140,8 +143,9 @@ struct SessionDetailView: View {
                     }
                     .frame(height: 6)
                     .accessibilityHidden(true)
-                    Text("\(m.requests) requests · \(Fmt.tokens(m.tokens.output)) output · \(Fmt.tokens(m.tokens.totalProcessed)) processed"
-                         + (model.settings.showEstimatedCost ? " · \(Fmt.cost(m.cost))" : ""))
+                    Text(model.settings.showEstimatedCost
+                         ? String(localized: "\(m.requests) requests · \(Fmt.tokens(m.tokens.output)) output · \(Fmt.tokens(m.tokens.totalProcessed)) processed · \(Fmt.cost(m.cost))")
+                         : String(localized: "\(m.requests) requests · \(Fmt.tokens(m.tokens.output)) output · \(Fmt.tokens(m.tokens.totalProcessed)) processed"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -151,12 +155,13 @@ struct SessionDetailView: View {
     private func agentsCard(_ d: SessionDetail) -> some View {
         let children = d.agents.filter { $0.key != nil }
         let childTotal = children.reduce(TokenCounts()) { $0 + $1.tokens }
-        return Card("Agents", subtitle: children.isEmpty ? "This session did not start any sub-agents." : "Sub-agent usage is part of the session total; it is counted once.") {
+        return Card(String(localized: "Agents"), subtitle: children.isEmpty ? String(localized: "This session did not start any sub-agents.")
+                        : String(localized: "Sub-agent usage is part of the session total; it is counted once.")) {
             ForEach(d.agents) { a in
                 HStack(alignment: .firstTextBaseline) {
                     Image(systemName: a.key == nil ? "person.fill" : "arrow.turn.down.right").foregroundStyle(.secondary).frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(a.key == nil ? "Main conversation" : "Agent \(String(a.key!.prefix(8)))").font(.callout.weight(.medium))
+                        (a.key == nil ? Text("Main conversation") : Text("Agent \(String(a.key!.prefix(8)))")).font(.callout.weight(.medium))
                         Text("\(a.requests) requests · \(a.topModel)").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -176,15 +181,16 @@ struct SessionDetailView: View {
 
     private func timelineCard(_ d: SessionDetail) -> some View {
         let points = d.timeline
-        return Card("Request timeline",
-                    subtitle: d.timelineIsBucketed ? "This session has many requests, so they are grouped into time buckets." : "One bar per model request.") {
+        return Card(String(localized: "Request timeline"),
+                    subtitle: d.timelineIsBucketed ? String(localized: "This session has many requests, so they are grouped into time buckets.")
+                        : String(localized: "One bar per model request.")) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     HStack(spacing: 14) {
-                        LegendDot(color: Palette.uncachedInput, label: "Uncached input")
-                        LegendDot(color: Palette.output, label: "Output")
-                        LegendDot(color: Palette.cacheWrite, label: "Cache write")
-                        if includeCacheReads { LegendDot(color: Palette.cacheRead, label: "Cache read") }
+                        LegendDot(color: Palette.uncachedInput, label: String(localized: "Uncached input"))
+                        LegendDot(color: Palette.output, label: String(localized: "Output"))
+                        LegendDot(color: Palette.cacheWrite, label: String(localized: "Cache write"))
+                        if includeCacheReads { LegendDot(color: Palette.cacheRead, label: String(localized: "Cache read")) }
                     }
                     Spacer()
                     Toggle("Include cache reads", isOn: $includeCacheReads).toggleStyle(.switch).controlSize(.small)
@@ -206,7 +212,9 @@ struct SessionDetailView: View {
                                 .annotation(position: .top, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(n.time.formatted(date: .abbreviated, time: .standard)).font(.caption.weight(.semibold))
-                                        Text("\(n.modelName)\(n.isChildAgent ? " · sub-agent" : "")\(n.requests > 1 ? " · \(n.requests) requests" : "")").font(.caption2)
+                                        Text([n.modelName, n.isChildAgent ? String(localized: "sub-agent") : nil,
+                                              n.requests > 1 ? String(localized: "\(n.requests) requests") : nil].compactMap { $0 }.joined(separator: " · "))
+                                            .font(.caption2)
                                         Text("in \(Fmt.grouped(n.tokens.uncachedInput)) · out \(Fmt.grouped(n.tokens.output))").font(.caption2).monospacedDigit()
                                         Text("cache read \(Fmt.grouped(n.tokens.cacheRead)) · write \(Fmt.grouped(n.tokens.cacheCreation))").font(.caption2).monospacedDigit()
                                     }
@@ -231,7 +239,8 @@ struct SessionDetailView: View {
 
     private func cacheCard(_ d: SessionDetail) -> some View {
         let points = d.timeline.filter { $0.tokens.logicalInput > 0 }
-        return Card("Cache efficiency", subtitle: "Share of each request's input that came from the prompt cache. Overall: \(Fmt.ratio(d.row.tokens.cacheHitRatio)).") {
+        return Card(String(localized: "Cache efficiency"),
+                    subtitle: String(localized: "Share of each request's input that came from the prompt cache. Overall: \(Fmt.ratio(d.row.tokens.cacheHitRatio)).")) {
             if points.count < 2 { Text("Not enough requests to chart.").foregroundStyle(.secondary) }
             else {
                 Chart(points) { p in
@@ -249,8 +258,8 @@ struct SessionDetailView: View {
     }
 
     private func windowsCard(_ d: SessionDetail) -> some View {
-        Card("Quota window context",
-             subtitle: "Which windows of this account's allowance this session overlapped. Shares below describe locally observed activity only.") {
+        Card(String(localized: "Quota window context"),
+             subtitle: String(localized: "Which windows of this account's allowance this session overlapped. Shares below describe locally observed activity only.")) {
             if d.windows.isEmpty {
                 Text("No authoritative quota history covers this session.")
                     .font(.callout).foregroundStyle(.secondary)

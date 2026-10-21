@@ -103,7 +103,7 @@ struct OverviewPage: View {
                                 OverviewRanking(period: period, data: data, showCost: model.settings.showEstimatedCost)
                             }
                         }
-                        Text("Counts come from the local files that \(toolList(conjunction: "and")) write on this Mac. Chat apps and other devices leave no record here, so these totals can be lower than what your accounts really used. Limits are the exception: they come from the providers and include everything.")
+                        Text("Counts come from the local files that \(toolList(conjunction: .and)) write on this Mac. Chat apps and other devices leave no record here, so these totals can be lower than what your accounts really used. Limits are the exception: they come from the providers and include everything.")
                             .font(.caption).foregroundStyle(.secondary).frame(maxWidth: 820, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                         if let loadError {
@@ -185,11 +185,16 @@ struct OverviewPage: View {
                 let key = w.id + "|\(reset.timeIntervalSince1970)"
                 guard model.dismissedLimitWarning != key else { continue }
                 let window = WindowNaming.displayName(minutes: w.windowMinutes, fallbackKey: w.windowKey).lowercased()
-                let account = pool.pool.accountLabel == "Unassigned" ? "" : " (\(pool.pool.accountLabel))"
+                let name = pool.pool.name
+                let account = pool.pool.accountLabel
+                let outAt = OverviewLogic.clock(out, now: now, calendar: calendar)
+                let resetAt = OverviewLogic.clock(reset, now: now, calendar: calendar)
+                let pct = Int(used.rounded())
                 return LimitWarning(
                     key: key,
-                    title: "\(pool.pool.name)\(account) will reach its \(window) limit \(OverviewLogic.clock(out, now: now, calendar: calendar))",
-                    detail: "\(Int(used.rounded()))% of the \(window) allowance is used, and it resets \(OverviewLogic.clock(reset, now: now, calendar: calendar)). Moving to a lighter model or to another tool for a while keeps you working.")
+                    title: account == "Unassigned" ? String(localized: "\(name) will reach its \(window) limit \(outAt)")
+                        : String(localized: "\(name) (\(account)) will reach its \(window) limit \(outAt)"),
+                    detail: String(localized: "\(pct)% of the \(window) allowance is used, and it resets \(resetAt). Moving to a lighter model or to another tool for a while keeps you working."))
             }
         }
         return nil
@@ -228,11 +233,15 @@ struct OverviewPage: View {
     @ViewBuilder private var importCard: some View {
         let snap = model.collectorSnapshot
         if isImporting, let p = snap.progress {
-            importPanel(title: "Importing your history", progress: p,
-                        text: "\(Int(p * 100))% done. \(bytes(snap.bytesDone)) of \(bytes(snap.bytesTotal)) read. The numbers below are partial until this finishes.",
+            let pct = Int(p * 100)
+            let done = bytes(snap.bytesDone)
+            let total = bytes(snap.bytesTotal)
+            importPanel(title: String(localized: "Importing your history"), progress: p,
+                        text: String(localized: "\(pct)% done. \(done) of \(total) read. The numbers below are partial until this finishes."),
                         done: false)
         } else if sawImport && !importHidden {
-            importPanel(title: "History import finished", progress: 1, text: "Every number on this page is now complete.", done: true)
+            importPanel(title: String(localized: "History import finished"), progress: 1,
+                        text: String(localized: "Every number on this page is now complete."), done: true)
         }
     }
 
@@ -288,7 +297,7 @@ struct OverviewPage: View {
                         step(2, Text("Or hold ") + Text("⌘").fontWeight(.medium) + Text(" and drag menu bar icons to move this one out from behind the notch."))
                     }
                     HStack(spacing: 12) {
-                        Button(iconCheck == .checking ? "Checking…" : "Check Again") { checkIcon() }
+                        Button(iconCheck == .checking ? String(localized: "Checking…") : String(localized: "Check Again")) { checkIcon() }
                             .buttonStyle(.borderedProminent)
                             .disabled(iconCheck == .checking)
                         Button("Hide Notice") { model.menuBarNoticeDismissed = true }
@@ -325,16 +334,17 @@ struct OverviewPage: View {
     // MARK: Empty states
 
     private var noUsageNotice: some View {
-        emptyPanel(symbol: "tray", title: "No usage yet",
-                   message: "Usage appears here as soon as \(toolList(conjunction: "or")) writes a session on this Mac. There is nothing to set up.") {
+        let tools = toolList(conjunction: .or)
+        return emptyPanel(symbol: "tray", title: String(localized: "No usage yet"),
+                          message: String(localized: "Usage appears here as soon as \(tools) writes a session on this Mac. There is nothing to set up.")) {
             Button("Check Again") { model.refreshNow() }.disabled(model.isCheckingNow)
         }
     }
 
     private var noMatchNotice: some View {
         let summary = model.scope.summary(registry: model.db.registry, options: model.filterOptions)
-        return emptyPanel(symbol: "line.3.horizontal.decrease.circle", title: "Nothing matches these filters",
-                          message: "There is no usage for \(summary). Pick another combination or clear the filters.") {
+        return emptyPanel(symbol: "line.3.horizontal.decrease.circle", title: String(localized: "Nothing matches these filters"),
+                          message: String(localized: "There is no usage for \(summary). Pick another combination or clear the filters.")) {
             Button("Clear Filters") { model.scope = DashboardScope() }
         }
     }
@@ -352,15 +362,22 @@ struct OverviewPage: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
     }
 
+    private enum Conjunction { case and, or }
+
     /// The tools that write the session files this app reads, such as "Claude Code and Codex".
-    private func toolList(conjunction: String) -> String {
+    private func toolList(conjunction: Conjunction) -> String {
         let registry = model.db.registry
         var names: [String] = []
         for source in registry.sources where source.kind == .sessionLogs {
             for product in source.products where !names.contains(model.productName(product)) { names.append(model.productName(product)) }
         }
-        guard let last = names.popLast() else { return "your coding tools" }
-        return names.isEmpty ? last : names.joined(separator: ", ") + " \(conjunction) " + last
+        guard let last = names.popLast() else { return String(localized: "your coding tools") }
+        if names.isEmpty { return last }
+        let head = names.joined(separator: ", ")
+        switch conjunction {
+        case .and: return String(localized: "\(head) and \(last)")
+        case .or: return String(localized: "\(head) or \(last)")
+        }
     }
 }
 
@@ -397,7 +414,7 @@ struct OverviewScopeBar: View {
     private var periodControl: some View {
         HStack(spacing: 8) {
             Text("Period").font(.caption).foregroundStyle(.secondary)
-            Segments(title: "Period", selection: $period, items: OverviewPeriod.allCases.map { ($0, $0.label) })
+            Segments(title: String(localized: "Period"), selection: $period, items: OverviewPeriod.allCases.map { ($0, $0.label) })
         }
     }
 
@@ -410,8 +427,8 @@ struct OverviewScopeBar: View {
             set: { value in model.scope.providers = value == "all" ? [] : [ProviderID(rawValue: value)] })
         return HStack(spacing: 8) {
             Text("Provider").font(.caption).foregroundStyle(.secondary)
-            Segments(title: "Provider", selection: selection,
-                     items: [("all", "All")] + model.filterOptions.providers.map { ($0.rawValue, model.toolName($0)) })
+            Segments(title: String(localized: "Provider"), selection: selection,
+                     items: [("all", String(localized: "All"))] + model.filterOptions.providers.map { ($0.rawValue, model.toolName($0)) })
         }
     }
 
@@ -420,10 +437,10 @@ struct OverviewScopeBar: View {
         let options = model.filterOptions
         let providers = model.scope.providers
         return HStack(spacing: 8) {
-            FilterMenu(title: "Account", selection: $model.scope.accounts,
+            FilterMenu(title: String(localized: "Account"), selection: $model.scope.accounts,
                        items: options.accounts.filter { providers.isEmpty || providers.contains($0.provider) }
-                           .map { ($0.id, "\(model.providerName($0.provider)) · \($0.label)") })
-            FilterMenu(title: "Surface", selection: $model.scope.surfaces,
+                           .map { ($0.id, "\(model.providerName($0.provider)) · \(DisplayText.localized($0.label))") })
+            FilterMenu(title: String(localized: "Surface"), selection: $model.scope.surfaces,
                        items: options.surfaces.map { ($0, model.surfaceName($0)) })
             if model.scope.isActive {
                 Button("Clear Filters") { model.scope = DashboardScope() }

@@ -15,7 +15,7 @@ struct ProjectsPage: View {
             HStack { RangePicker(selection: $range); Spacer() }
             if rows.isEmpty && model.hasLoaded { NoDataNotice() }
             else {
-                Card("Top projects", subtitle: "Processed tokens in the selected range") {
+                Card(String(localized: "Top projects"), subtitle: String(localized: "Processed tokens in the selected range")) {
                     Chart(rows.prefix(10)) { p in
                         BarMark(x: .value("Tokens", p.tokens.totalProcessed), y: .value("Project", p.name))
                             .foregroundStyle(ChartColors.shared.color(for: "project:\(p.id)"))
@@ -29,7 +29,7 @@ struct ProjectsPage: View {
                     } }
                     .frame(height: CGFloat(min(rows.count, 10)) * 30 + 30)
                 }
-                Card("How usage changes over time", subtitle: "Daily processed tokens for the busiest projects") {
+                Card(String(localized: "How usage changes over time"), subtitle: String(localized: "Daily processed tokens for the busiest projects")) {
                     let top = rows.prefix(6).map(\.id)
                     let names = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.name) })
                     Chart(trend.filter { top.contains(Int64($0.key) ?? -1) }) { p in
@@ -97,7 +97,7 @@ struct ModelsPage: View {
             if rows.isEmpty && model.hasLoaded { NoDataNotice() }
             else {
                 HStack(alignment: .top, spacing: 12) {
-                    Card("Token share", subtitle: "Share of all processed tokens") {
+                    Card(String(localized: "Token share"), subtitle: String(localized: "Share of all processed tokens")) {
                         Chart(rows) { m in
                             SectorMark(angle: .value("Tokens", m.tokens.totalProcessed), innerRadius: .ratio(0.62), angularInset: 1.5)
                                 .foregroundStyle(ChartColors.shared.color(for: m.canonical))
@@ -115,7 +115,7 @@ struct ModelsPage: View {
                             }
                         }
                     }
-                    Card("Request volume") {
+                    Card(String(localized: "Request volume")) {
                         Chart(rows) { m in
                             BarMark(x: .value("Requests", m.requests), y: .value("Model", m.displayName))
                                 .foregroundStyle(ChartColors.shared.color(for: m.canonical)).cornerRadius(3)
@@ -125,10 +125,13 @@ struct ModelsPage: View {
                         .frame(height: CGFloat(rows.count) * 36 + 30)
                     }
                 }
-                Card("Input, output and cache mix per model", subtitle: "Each bar shows how that model's processed tokens divide between the four categories.") {
+                Card(String(localized: "Input, output and cache mix per model"),
+                     subtitle: String(localized: "Each bar shows how that model's processed tokens divide between the four categories.")) {
                     HStack(spacing: 14) {
-                        LegendDot(color: Palette.uncachedInput, label: "Uncached input"); LegendDot(color: Palette.output, label: "Output")
-                        LegendDot(color: Palette.cacheRead, label: "Cache read"); LegendDot(color: Palette.cacheWrite, label: "Cache write")
+                        LegendDot(color: Palette.uncachedInput, label: String(localized: "Uncached input"))
+                        LegendDot(color: Palette.output, label: String(localized: "Output"))
+                        LegendDot(color: Palette.cacheRead, label: String(localized: "Cache read"))
+                        LegendDot(color: Palette.cacheWrite, label: String(localized: "Cache write"))
                     }
                     Chart {
                         ForEach(rows) { m in
@@ -162,7 +165,7 @@ struct ModelsPage: View {
                     if model.settings.showEstimatedCost {
                         TableColumn("Est. cost", value: \.cost.picoUSD) { m in
                             Text(Fmt.cost(m.cost)).monospacedDigit()
-                                .help(m.cost.isPartial ? "No price card exists for this model, so its tokens are not included." : "")
+                                .help(m.cost.isPartial ? String(localized: "No price card exists for this model, so its tokens are not included.") : "")
                         }.width(80)
                     }
                 }

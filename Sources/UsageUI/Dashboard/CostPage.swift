@@ -25,8 +25,9 @@ struct CostPage: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
                     ForEach(providers) { row in
                         KPITile(title: model.providerName(row.provider), value: Fmt.cost(row.cost),
-                                detail: row.cost.isPartial ? "\(Fmt.tokens(row.cost.unpricedTokens)) tokens have no price" : "\(Fmt.tokens(row.tokens.totalProcessed)) processed",
-                                help: "API-equivalent estimate for this provider only. Providers are not added together, because they price tokens differently.")
+                                detail: row.cost.isPartial ? String(localized: "\(Fmt.tokens(row.cost.unpricedTokens)) tokens have no price")
+                                    : String(localized: "\(Fmt.tokens(row.tokens.totalProcessed)) processed"),
+                                help: String(localized: "API-equivalent estimate for this provider only. Providers are not added together, because they price tokens differently."))
                     }
                 }
                 ForEach(providers.filter { $0.cost.picoUSD == 0 && $0.cost.unpricedTokens > 0 }) { row in
@@ -38,7 +39,7 @@ struct CostPage: View {
                     }
                 }
                 if providers.contains(where: { $0.cost.derivedTokens > 0 || $0.cost.userPricedTokens > 0 }) {
-                    Card("Where the prices come from") {
+                    Card(String(localized: "Where the prices come from")) {
                         ForEach(providers.filter { $0.cost.derivedTokens > 0 || $0.cost.userPricedTokens > 0 }) { row in
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(model.providerName(row.provider)).font(.subheadline.weight(.semibold))
@@ -52,7 +53,7 @@ struct CostPage: View {
                         }
                     }
                 }
-                Card("Cost per day", subtitle: "Estimated, by provider. Days with unpriced usage are lower bounds.") {
+                Card(String(localized: "Cost per day"), subtitle: String(localized: "Estimated, by provider. Days with unpriced usage are lower bounds.")) {
                     if daily.isEmpty { Text("No priced usage in this period.").foregroundStyle(.secondary) }
                     else {
                         let ids = Array(Set(daily.map(\.key))).sorted()
@@ -69,7 +70,7 @@ struct CostPage: View {
                         .frame(height: 200)
                     }
                 }
-                Card("By model") {
+                Card(String(localized: "By model")) {
                     Grid(alignment: .trailing, horizontalSpacing: 18, verticalSpacing: 5) {
                         GridRow {
                             Text("Model").gridColumnAlignment(.leading)
@@ -98,11 +99,11 @@ struct CostPage: View {
 
     /// Says where the prices behind a model's estimate come from.
     private func priceBasis(_ cost: EstimatedCost) -> String {
-        if cost.picoUSD == 0 && cost.unpricedTokens > 0 { return "unpriced" }
-        var parts = ["published"]
-        if cost.derivedTokens > 0 { parts.append("partly derived") }
-        if cost.userPricedTokens > 0 { parts = ["yours"] }
-        if cost.unpricedTokens > 0 { parts.append("partly unpriced") }
+        if cost.picoUSD == 0 && cost.unpricedTokens > 0 { return String(localized: "unpriced") }
+        var parts = [String(localized: "published")]
+        if cost.derivedTokens > 0 { parts.append(String(localized: "partly derived")) }
+        if cost.userPricedTokens > 0 { parts = [String(localized: "yours")] }
+        if cost.unpricedTokens > 0 { parts.append(String(localized: "partly unpriced")) }
         return parts.joined(separator: ", ")
     }
 

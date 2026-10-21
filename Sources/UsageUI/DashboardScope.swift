@@ -49,6 +49,6 @@ public struct DashboardScope: Equatable, Sendable {
         parts += products.compactMap { registry.product($0)?.name }.sorted()
         parts += accounts.compactMap { id in options.accounts.first { $0.id == id }?.label }.sorted()
         parts += surfaces.compactMap { registry.surface($0)?.name }.sorted()
-        return parts.isEmpty ? "All providers" : parts.joined(separator: " · ")
+        return parts.isEmpty ? String(localized: "All providers") : parts.joined(separator: " · ")
     }
 }

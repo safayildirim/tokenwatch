@@ -129,9 +129,9 @@ public enum StatusLineInstaller {
         case writeFailed(String)
         public var description: String {
             switch self {
-            case .settingsNotValidJSON: "Claude Code's settings.json is not valid JSON, so it was left untouched."
-            case .bridgeNotFound: "The status line helper could not be found next to the app."
-            case .writeFailed(let m): "Could not update settings.json: \(m)"
+            case .settingsNotValidJSON: String(localized: "Claude Code's settings.json is not valid JSON, so it was left untouched.")
+            case .bridgeNotFound: String(localized: "The status line helper could not be found next to the app.")
+            case .writeFailed(let m): String(localized: "Could not update settings.json: \(m)")
             }
         }
     }

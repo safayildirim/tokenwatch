@@ -282,7 +282,8 @@ public actor UsageCollector {
             if !adapter.watchRoots.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
                 health.state = .notFound
                 health.filesKnown = 0
-                health.lastError = "Data folder not found: \(adapter.watchRoots.first?.path ?? "?")"
+                let folder = adapter.watchRoots.first?.path ?? "?"
+                health.lastError = String(localized: "Data folder not found: \(folder)")
                 healthBySource[adapter.sourceID] = health
                 continue
             }
@@ -469,12 +470,12 @@ public actor UsageCollector {
     private static func describe(_ error: any Error) -> String {
         if let e = error as? FileAccessError {
             return e.isPermissionDenied
-                ? "macOS denied access to \(e.path). Grant the app access in System Settings > Privacy & Security."
+                ? String(localized: "macOS denied access to \(e.path). Grant the app access in System Settings > Privacy & Security.")
                 : e.description
         }
         if let e = error as? SQLiteError {
-            if e.isDiskFull { return "The disk is full, so usage data cannot be saved. Free up space to resume." }
-            if e.isBusy { return "The database stayed locked by another process." }
+            if e.isDiskFull { return String(localized: "The disk is full, so usage data cannot be saved. Free up space to resume.") }
+            if e.isBusy { return String(localized: "The database stayed locked by another process.") }
             return e.description
         }
         return "\(error)"

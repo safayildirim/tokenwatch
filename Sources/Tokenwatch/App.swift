@@ -13,6 +13,7 @@ struct TokenwatchApp: App {
 
     init() {
         if CommandLineActions.handle() { exit(0) }
+        AppLanguage.waitForReplacedCopy()
         // Opening the app a second time brings the running copy forward instead of starting a second collector.
         guard let lock = SingleInstanceLock.acquire() else {
             SingleInstanceLock.activateRunningCopy()

@@ -130,7 +130,7 @@ public struct QuotaWindowState: Sendable, Identifiable, Equatable {
     /// A long form such as "Weekly window", for headings.
     public var displayName: String {
         let base = WindowNaming.displayName(minutes: windowMinutes, fallbackKey: windowKey)
-        return windowMinutes == nil ? base : base + " window"
+        return windowMinutes == nil ? base : String(localized: "\(base) window")
     }
 
     /// A compact form such as "5h" or "Week", for the menu bar.

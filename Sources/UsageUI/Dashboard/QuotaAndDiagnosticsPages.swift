@@ -32,7 +32,7 @@ struct QuotaPage: View {
             if model.providers.contains(where: { $0.id == .anthropic }), scopeIncludesAnthropic { QuotaSetupCard() }
             unobservableCard
             historyCard
-            Card("What these numbers mean") {
+            Card(String(localized: "What these numbers mean")) {
                 VStack(alignment: .leading, spacing: 6) {
                     bullet("Percentages and reset times come only from the provider's own software. They are never calculated from token counts, because a subscription meter depends on more than raw tokens.")
                     bullet("Each percentage belongs to one pool of one account. Pools are listed separately and are never added together, and two accounts of the same provider never share a figure.")
@@ -53,14 +53,15 @@ struct QuotaPage: View {
         let hidden = registry.products.filter { !$0.isObservable && (model.scope.providers.isEmpty || model.scope.providers.contains($0.provider)) }
         return Group {
             if !hidden.isEmpty {
-                Card("Not observable on this Mac", subtitle: "These count toward real limits but leave no record here, so no figure is shown for them and none is guessed.") {
+                Card(String(localized: "Not observable on this Mac"),
+                     subtitle: String(localized: "These count toward real limits but leave no record here, so no figure is shown for them and none is guessed.")) {
                     ForEach(hidden, id: \.id) { product in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack {
                                 Label(product.name, systemImage: "eye.slash").font(.callout.weight(.medium))
                                 ProviderChip(provider: product.provider)
                             }
-                            Text(product.observability).font(.caption).foregroundStyle(.secondary)
+                            Text(DisplayText.localized(product.observability)).font(.caption).foregroundStyle(.secondary)
                             if let pool = registry.pools(of: product.id).first, pool.products.count > 1 || !pool.isObservable {
                                 Text(pool.note).font(.caption).foregroundStyle(.secondary)
                             }
@@ -72,7 +73,8 @@ struct QuotaPage: View {
     }
 
     private var historyCard: some View {
-        Card("Utilization history", subtitle: "Account-level percentages as reported by each provider, from the moments this Mac observed them.") {
+        Card(String(localized: "Utilization history"),
+             subtitle: String(localized: "Account-level percentages as reported by each provider, from the moments this Mac observed them.")) {
             Picker("Period", selection: $days) {
                 Text("24 hours").tag(1); Text("7 days").tag(7); Text("30 days").tag(30)
             }.pickerStyle(.segmented).frame(width: 260).labelsHidden()
@@ -117,7 +119,7 @@ struct QuotaPage: View {
         history = out
     }
 
-    private func bullet(_ text: String) -> some View {
+    private func bullet(_ text: LocalizedStringKey) -> some View {
         HStack(alignment: .top, spacing: 8) { Text("•"); Text(text).fixedSize(horizontal: false, vertical: true) }
     }
 }
@@ -130,12 +132,13 @@ struct QuotaSetupCard: View {
     @State private var confirming = false
 
     var body: some View {
-        Card("Claude quota tracking", subtitle: "Claude subscription usage is only available through Claude Code's documented status line feature. Codex needs no setup, because it records its own quota snapshots.") {
+        Card(String(localized: "Claude quota tracking"),
+             subtitle: String(localized: "Claude subscription usage is only available through Claude Code's documented status line feature. Codex needs no setup, because it records its own quota snapshots.")) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: inspection.isInstalled ? "checkmark.circle.fill" : "exclamationmark.circle")
                         .foregroundStyle(inspection.isInstalled ? Palette.good : Palette.warning)
-                    Text(inspection.isInstalled ? "Status line helper is installed in Claude Code's settings." : "Status line helper is not installed.")
+                    (inspection.isInstalled ? Text("Status line helper is installed in Claude Code's settings.") : Text("Status line helper is not installed."))
                         .font(.callout.weight(.medium))
                 }
                 if inspection.isInstalled, let chained = inspection.chainedCommand {
@@ -153,10 +156,7 @@ struct QuotaSetupCard: View {
                     Text("~/.claude/settings.json is not valid JSON, so it will not be modified.").font(.caption).foregroundStyle(Palette.critical)
                 }
                 let feed = model.quotaFeeds.first { $0.id == .claudeStatusLine }
-                Text((feed?.originCount ?? 0) > 0
-                     ? "Receiving data from \(feed!.originCount) Claude Code session\(feed!.originCount == 1 ? "" : "s"); newest report \(Fmt.relative(feed?.newestObservation))."
-                     : "No report received yet. Quota appears after you send a message in a new Claude Code terminal session.")
-                    .font(.caption).foregroundStyle(.secondary)
+                feedText(feed).font(.caption).foregroundStyle(.secondary)
                 HStack {
                     if inspection.isInstalled {
                         Button("Remove helper") { run { try StatusLineInstaller.uninstall() } }
@@ -181,10 +181,19 @@ struct QuotaSetupCard: View {
         }
     }
 
+    private func feedText(_ feed: QuotaFeedStatus?) -> Text {
+        let origins = feed?.originCount ?? 0
+        let newest = Fmt.relative(feed?.newestObservation)
+        if origins == 0 { return Text("No report received yet. Quota appears after you send a message in a new Claude Code terminal session.") }
+        return origins == 1
+            ? Text("Receiving data from \(origins) Claude Code session; newest report \(newest).")
+            : Text("Receiving data from \(origins) Claude Code sessions; newest report \(newest).")
+    }
+
     private func run(_ action: () throws -> Any?) {
         do {
             let result = try action()
-            if let url = result as? URL { message = "Done. A backup was saved to \(url.lastPathComponent)." } else { message = "Done." }
+            if let url = result as? URL { message = String(localized: "Done. A backup was saved to \(url.lastPathComponent).") } else { message = String(localized: "Done.") }
         } catch { message = "\(error)" }
         inspection = StatusLineInstaller.inspect()
         model.requestRefresh()
@@ -204,7 +213,8 @@ struct DiagnosticsPage: View {
 
     var body: some View {
         PageScroll {
-            Card("Collection", subtitle: "Each usage source is collected independently. A problem with one never stops another.") {
+            Card(String(localized: "Collection"),
+                 subtitle: String(localized: "Each usage source is collected independently. A problem with one never stops another.")) {
                 let snap = model.collectorSnapshot
                 ForEach(snap.sources) { s in
                     VStack(alignment: .leading, spacing: 4) {
@@ -229,7 +239,7 @@ struct DiagnosticsPage: View {
                 }.font(.callout)
             }
 
-            Card("Database") {
+            Card(String(localized: "Database")) {
                 if let c = counts {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 3) {
                         GridRow { Text("Location").foregroundStyle(.secondary); Text(QuotaPaths.databaseURL.path).textSelection(.enabled).lineLimit(1).truncationMode(.middle) }
@@ -244,7 +254,10 @@ struct DiagnosticsPage: View {
                     }.font(.callout)
                 }
                 HStack {
-                    Button("Check integrity") { run { integrity = (try? model.db.integrityCheck().joined(separator: ", ")) ?? "failed" } }
+                    Button("Check integrity") {
+                        let failed = String(localized: "failed")
+                        run { integrity = (try? model.db.integrityCheck().joined(separator: ", ")) ?? failed }
+                    }
                     Button("Verify against source files") { verify() }
                     Button("Rebuild from source…") { model.rebuildFromSource() }
                         .help("Deletes usage records and imports them again from the original files.")
@@ -255,16 +268,17 @@ struct DiagnosticsPage: View {
                 if let verification { Text(verification).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
 
-            Card("This app's resource use", subtitle: "The monitor should stay unnoticeable.") {
+            Card(String(localized: "This app's resource use"), subtitle: String(localized: "The monitor should stay unnoticeable.")) {
                 Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 3) {
                     GridRow { Text("Memory (resident)").foregroundStyle(.secondary); Text(String(format: "%.0f MB", stats.residentMB)) }
-                    GridRow { Text("CPU time used").foregroundStyle(.secondary); Text(String(format: "%.1f s since launch", stats.cpuSeconds)) }
+                    GridRow { Text("CPU time used").foregroundStyle(.secondary); Text("\(String(format: "%.1f", stats.cpuSeconds)) s since launch") }
                     GridRow { Text("Threads").foregroundStyle(.secondary); Text("\(stats.threads)") }
                 }.font(.callout)
             }
 
             if let c = counts, !c.notices.isEmpty {
-                Card("Accounting notes", subtitle: "Places where the files could not settle exactly what was used. The figures are still counted, as described.") {
+                Card(String(localized: "Accounting notes"),
+                     subtitle: String(localized: "Places where the files could not settle exactly what was used. The figures are still counted, as described.")) {
                     ForEach(c.notices) { i in
                         VStack(alignment: .leading, spacing: 1) {
                             Text(i.message).font(.caption)
@@ -275,7 +289,7 @@ struct DiagnosticsPage: View {
             }
 
             if let c = counts, !c.issues.isEmpty {
-                Card("Recent problems") {
+                Card(String(localized: "Recent problems")) {
                     ForEach(c.issues) { i in
                         VStack(alignment: .leading, spacing: 1) {
                             Text("\(Fmt.dateTime(i.at)) · \(i.message)").font(.caption)
@@ -291,10 +305,10 @@ struct DiagnosticsPage: View {
 
     private func stateText(_ s: SourceHealth) -> String {
         switch s.state {
-        case .ok: "Healthy"
-        case .notFound: "Not found"
-        case .degraded: "Some files failing"
-        case .failing: "Failing"
+        case .ok: String(localized: "Healthy")
+        case .notFound: String(localized: "Not found")
+        case .degraded: String(localized: "Some files failing")
+        case .failing: String(localized: "Failing")
         }
     }
 
@@ -305,7 +319,7 @@ struct DiagnosticsPage: View {
 
     private func verify() {
         running = true
-        verification = "Recounting every token from the original files…"
+        verification = String(localized: "Recounting every token from the original files…")
         let db = model.db
         let enabled = model.collectorSnapshot.sources.filter { $0.state != .notFound }.map(\.sourceID)
         Task.detached {
@@ -313,20 +327,22 @@ struct DiagnosticsPage: View {
             if enabled.contains(.claudeTranscripts) {
                 do {
                     let r = try SourceVerifier(db: db).verify()
+                    let requests = Fmt.grouped(Int64(r.requestsInSource))
+                    let overstated = String(format: "%.1f", Double(r.naiveSumOfAllLines.cacheRead) / Double(max(1, r.sourceTotals.cacheRead)))
                     lines.append(r.isConsistent
-                        ? "Claude Code: \(r.sessionsChecked) sessions and \(Fmt.grouped(Int64(r.requestsInSource))) requests recounted independently match the database exactly. (Adding up every log line instead would have overstated cache reads by \(String(format: "%.1f", Double(r.naiveSumOfAllLines.cacheRead) / Double(max(1, r.sourceTotals.cacheRead))))×.)"
-                        : "Claude Code: mismatch in \(r.mismatches.count) places. Use \"Rebuild from source\" to repair, and please report it.")
-                } catch { lines.append("Claude Code: verification failed: \(error)") }
+                        ? String(localized: "Claude Code: \(r.sessionsChecked) sessions and \(requests) requests recounted independently match the database exactly. (Adding up every log line instead would have overstated cache reads by \(overstated)×.)")
+                        : String(localized: "Claude Code: mismatch in \(r.mismatches.count) places. Use \"Rebuild from source\" to repair, and please report it."))
+                } catch { lines.append(String(localized: "Claude Code: verification failed: \(String(describing: error))")) }
             }
             if enabled.contains(.codexRollouts) {
                 do {
                     let r = try CodexVerifier(db: db).verify()
                     lines.append(r.isConsistent
-                        ? "Codex: \(r.sessionsChecked) sessions (\(r.recordSessions) by usage record, \(r.eventSessions) by event, \(r.forkSessions) fork) recounted independently match the database exactly."
-                        : "Codex: mismatch in \(r.mismatches.count) sessions. Use \"Rebuild from source\" to repair, and please report it.")
-                } catch { lines.append("Codex: verification failed: \(error)") }
+                        ? String(localized: "Codex: \(r.sessionsChecked) sessions (\(r.recordSessions) by usage record, \(r.eventSessions) by event, \(r.forkSessions) fork) recounted independently match the database exactly.")
+                        : String(localized: "Codex: mismatch in \(r.mismatches.count) sessions. Use \"Rebuild from source\" to repair, and please report it."))
+                } catch { lines.append(String(localized: "Codex: verification failed: \(String(describing: error))")) }
             }
-            let text = lines.isEmpty ? "No source with data to verify." : lines.joined(separator: "\n")
+            let text = lines.isEmpty ? String(localized: "No source with data to verify.") : lines.joined(separator: "\n")
             await MainActor.run { verification = text; running = false }
         }
     }

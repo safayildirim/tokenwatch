@@ -14,10 +14,10 @@ public enum NotificationPermission: Equatable, Sendable {
 
     public var description: String {
         switch self {
-        case .notDetermined: "Not asked yet"
-        case .allowed: "Allowed"
-        case .denied: "Turned off in System Settings > Notifications"
-        case .unavailable: "Not available in this process"
+        case .notDetermined: String(localized: "Not asked yet")
+        case .allowed: String(localized: "Allowed")
+        case .denied: String(localized: "Turned off in System Settings > Notifications")
+        case .unavailable: String(localized: "Not available in this process")
         }
     }
 }
@@ -95,13 +95,13 @@ public struct NotificationService: Sendable {
         switch await requestPermission() {
         case .allowed: break
         case .denied:
-            report.problem = "Notifications are turned off for this app. Turn them on in System Settings > Notifications."
+            report.problem = String(localized: "Notifications are turned off for this app. Turn them on in System Settings > Notifications.")
             return report
         case .notDetermined:
-            report.problem = "macOS has not given this app permission to show notifications."
+            report.problem = String(localized: "macOS has not given this app permission to show notifications.")
             return report
         case .unavailable:
-            report.problem = "Notifications can only be shown by the installed app."
+            report.problem = String(localized: "Notifications can only be shown by the installed app.")
             return report
         }
         for note in notes {
@@ -109,7 +109,7 @@ public struct NotificationService: Sendable {
                 try await sink.add(identifier: note.key, title: note.title, body: note.body, thread: note.kind.rawValue)
                 report.delivered += 1
             } catch {
-                report.problem = "macOS refused a notification: \(error.localizedDescription)"
+                report.problem = String(localized: "macOS refused a notification: \(error.localizedDescription)")
             }
         }
         return report
@@ -118,6 +118,6 @@ public struct NotificationService: Sendable {
     /// A notification that has nothing to do with any quota, to check that delivery works.
     public func sendTest() async -> NotificationReport {
         await deliver([AlertNotification(key: "test-\(UUID().uuidString)", kind: .threshold, title: "Tokenwatch",
-                                         body: "This is a test. Notifications are working.")])
+                                         body: String(localized: "This is a test. Notifications are working."))])
     }
 }

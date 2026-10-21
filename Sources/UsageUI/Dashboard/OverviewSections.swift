@@ -96,8 +96,8 @@ struct OverviewLimits: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeading(title: "Your limits right now",
-                           note: "Limits belong to an account and run on their own clock, so the period and surface filters do not change them.")
+            SectionHeading(title: String(localized: "Your limits right now"),
+                           note: String(localized: "Limits belong to an account and run on their own clock, so the period and surface filters do not change them."))
             if pools.isEmpty {
                 Text("No provider has reported a limit yet.").foregroundStyle(.secondary).overviewCard()
             } else {
@@ -144,7 +144,7 @@ struct OverviewLimits: View {
     /// The account and plan, such as "Personal · Max plan".
     private func chip(_ info: QuotaPoolInfo) -> String? {
         let account = info.accountLabel == "Unassigned" ? nil : info.accountLabel
-        let plan = info.planType.map { $0.capitalized + " plan" }
+        let plan = info.planType.map { p in String(localized: "\(p.capitalized) plan") }
         let parts = [account, plan].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -215,14 +215,18 @@ private struct WindowTile: View {
     }
 
     private func timing(_ outlook: WindowOutlook) -> String {
-        guard let reset = state.resetsAt else { return "Reset time not reported." }
+        guard let reset = state.resetsAt else { return String(localized: "Reset time not reported.") }
         let calendar = Calendar.current
-        let resetText = "Resets \(OverviewLogic.clock(reset, now: now, calendar: calendar)), in \(Fmt.spokenDuration(reset.timeIntervalSince(now)))."
+        let at = OverviewLogic.clock(reset, now: now, calendar: calendar)
+        let wait = Fmt.spokenDuration(reset.timeIntervalSince(now))
+        let resetText = String(localized: "Resets \(at), in \(wait).")
         guard state.length != nil else { return resetText }
         if let out = outlook.runsOutAt {
-            return resetText + " At this pace it runs out \(OverviewLogic.clock(out, now: now, calendar: calendar)), \(Fmt.spokenDuration(reset.timeIntervalSince(out))) early."
+            let outAt = OverviewLogic.clock(out, now: now, calendar: calendar)
+            let early = Fmt.spokenDuration(reset.timeIntervalSince(out))
+            return resetText + " " + String(localized: "At this pace it runs out \(outAt), \(early) early.")
         }
-        return resetText + " At this pace it lasts until then."
+        return resetText + " " + String(localized: "At this pace it lasts until then.")
     }
 }
 
@@ -265,12 +269,14 @@ struct OverviewGlance: View {
     var showCost: Bool
     @State private var explaining = false
 
-    private static let glossary: [(String, String)] = [
-        ("New tokens", "Text the tools sent for the first time, plus everything the model wrote. This is the number that follows real work."),
-        ("Reused from cache", "Context sent again in later turns of a conversation. Providers charge far less for it, so a high share is a good sign."),
-        ("Sessions", "One conversation in a coding tool. A session counts as active when it wrote something in the last few minutes."),
-        ("Est. API cost", "What this usage would cost at published API prices. It is not your subscription bill."),
-    ]
+    private static var glossary: [(String, String)] {
+        [
+            (String(localized: "New tokens"), String(localized: "Text the tools sent for the first time, plus everything the model wrote. This is the number that follows real work.")),
+            (String(localized: "Reused from cache"), String(localized: "Context sent again in later turns of a conversation. Providers charge far less for it, so a high share is a good sign.")),
+            (String(localized: "Sessions"), String(localized: "One conversation in a coding tool. A session counts as active when it wrote something in the last few minutes.")),
+            (String(localized: "Est. API cost"), String(localized: "What this usage would cost at published API prices. It is not your subscription bill.")),
+        ]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -278,7 +284,8 @@ struct OverviewGlance: View {
                 Text(period.title).font(.system(size: 15, weight: .semibold)).accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 0)
                 Button { explaining.toggle() } label: {
-                    Label(explaining ? "Hide Explanations" : "What Do These Mean?", systemImage: "questionmark.circle")
+                    Label(explaining ? String(localized: "Hide Explanations") : String(localized: "What Do These Mean?"),
+                          systemImage: "questionmark.circle")
                 }
             }
             if explaining {
@@ -310,25 +317,34 @@ struct OverviewGlance: View {
         let reuse: String
         if cur.coverage.requests > 0 && cur.coverage.missingCacheRead == cur.coverage.requests { reuse = "—" }
         else { reuse = cur.tokens.cacheHitRatio.map { "\(Int(($0 * 100).rounded()))%" } ?? "—" }
+        let processed = Fmt.tokens(cur.tokens.totalProcessed)
         var out = [
-            Tile(label: "New tokens", value: Fmt.tokens(cur.tokens.freshTokens),
+            Tile(label: String(localized: "New tokens"), value: Fmt.tokens(cur.tokens.freshTokens),
                  sub: OverviewLogic.changeText(current: cur.tokens.freshTokens, previous: data.previous.tokens.freshTokens, period: period),
-                 note: "\(Fmt.tokens(cur.tokens.totalProcessed)) processed in total, counting cache reads."),
-            Tile(label: "Reused from cache", value: reuse, sub: "of all input came from the cache.", note: "A higher share is cheaper and faster."),
-            Tile(label: "Sessions", value: "\(cur.sessions)", sub: "\(activeNow) active right now.", note: sessionsNote),
+                 note: String(localized: "\(processed) processed in total, counting cache reads.")),
+            Tile(label: String(localized: "Reused from cache"), value: reuse, sub: String(localized: "of all input came from the cache."),
+                 note: String(localized: "A higher share is cheaper and faster.")),
+            Tile(label: String(localized: "Sessions"), value: "\(cur.sessions)", sub: String(localized: "\(activeNow) active right now."), note: sessionsNote),
         ]
         if showCost {
-            out.append(Tile(label: "API-equivalent cost", value: Fmt.cost(cur.cost), sub: "At published API prices.",
-                            note: "This is not your subscription bill."))
+            out.append(Tile(label: String(localized: "API-equivalent cost"), value: Fmt.cost(cur.cost), sub: String(localized: "At published API prices."),
+                            note: String(localized: "This is not your subscription bill.")))
         }
         return out
     }
 
     private var sessionsNote: String {
         let rows = data.providers.filter { $0.sessions > 0 }
-        if rows.isEmpty { return "No sessions \(period.phrase)." }
-        if rows.count == 1 { return "All in \(model.toolName(rows[0].provider))." }
-        return ListFormatter.localizedString(byJoining: rows.map { "\($0.sessions) in \(model.toolName($0.provider))" }) + "."
+        if rows.isEmpty { return period.noSessionsLine }
+        if rows.count == 1 {
+            let tool = model.toolName(rows[0].provider)
+            return String(localized: "All in \(tool).")
+        }
+        let parts = rows.map { row in
+            let tool = model.toolName(row.provider)
+            return String(localized: "\(row.sessions) in \(tool)")
+        }
+        return OverviewLogic.list(parts) + "."
     }
 }
 
@@ -368,7 +384,7 @@ struct OverviewActivity: View {
         let providers = shownProviders
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 16) {
-                CardHeading(title: "Activity", subtitle: period.chartSubtitle)
+                CardHeading(title: String(localized: "Activity"), subtitle: period.chartSubtitle)
                 Spacer(minLength: 0)
                 HStack(spacing: 14) {
                     ForEach(providers, id: \.self) { p in LegendDot(color: model.providerColor(p), label: model.toolName(p)) }
@@ -455,12 +471,13 @@ struct OverviewActivity: View {
 
     private func barLabel(_ b: OverviewBucket) -> String {
         let title = OverviewLogic.title(of: b, period: period)
-        return b.isFuture ? title + ": not reached yet" : title + ": " + Fmt.tokens(b.totalFresh) + " new tokens"
+        let total = Fmt.tokens(b.totalFresh)
+        return b.isFuture ? String(localized: "\(title): not reached yet") : String(localized: "\(title): \(total) new tokens")
     }
 
     private func detail(_ b: OverviewBucket, providers: [ProviderID]) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(period == .today ? "Selected hour" : "Selected day").font(.caption).foregroundStyle(.secondary)
+            (period == .today ? Text("Selected hour") : Text("Selected day")).font(.caption).foregroundStyle(.secondary)
             Text(OverviewLogic.title(of: b, period: period)).fontWeight(.semibold)
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 figure(Fmt.tokens(b.totalFresh), size: 26)
@@ -471,9 +488,9 @@ struct OverviewActivity: View {
                 ForEach(providers, id: \.self) { p in
                     detailRow(model.toolName(p), Fmt.tokens(b.fresh[p] ?? 0), swatch: model.providerColor(p))
                 }
-                detailRow("Cache reads", Fmt.tokens(b.cacheRead))
-                detailRow("Sessions", "\(b.sessions)")
-                if showCost { detailRow("API-equivalent cost", Fmt.cost(b.cost)) }
+                detailRow(String(localized: "Cache reads"), Fmt.tokens(b.cacheRead))
+                detailRow(String(localized: "Sessions"), "\(b.sessions)")
+                if showCost { detailRow(String(localized: "API-equivalent cost"), Fmt.cost(b.cost)) }
             }
         }
         .padding(14)
@@ -557,13 +574,16 @@ struct OverviewTokenMix: View {
 
     private var parts: [Part] {
         var p = [
-            Part(name: "Output", value: tokens.output, color: Palette.output, why: "What the model wrote: answers, code and tool calls."),
-            Part(name: "Cache writes", value: tokens.cacheCreation, color: Palette.cacheWrite, why: "Context saved the first time, so later turns can reuse it."),
-            Part(name: "Uncached input", value: tokens.uncachedInput, color: Palette.uncachedInput, why: "Prompt text read fresh, without the cache."),
+            Part(name: String(localized: "Output"), value: tokens.output, color: Palette.output,
+                 why: String(localized: "What the model wrote: answers, code and tool calls.")),
+            Part(name: String(localized: "Cache writes"), value: tokens.cacheCreation, color: Palette.cacheWrite,
+                 why: String(localized: "Context saved the first time, so later turns can reuse it.")),
+            Part(name: String(localized: "Uncached input"), value: tokens.uncachedInput, color: Palette.uncachedInput,
+                 why: String(localized: "Prompt text read fresh, without the cache.")),
         ]
         if includeCacheReads {
-            p.append(Part(name: "Cache reads", value: tokens.cacheRead, color: Palette.cacheRead,
-                          why: "Saved context read again. Each read is cheap, but they dominate long sessions."))
+            p.append(Part(name: String(localized: "Cache reads"), value: tokens.cacheRead, color: Palette.cacheRead,
+                          why: String(localized: "Saved context read again. Each read is cheap, but they dominate long sessions.")))
         }
         return p.filter { $0.value > 0 }
     }
@@ -573,9 +593,8 @@ struct OverviewTokenMix: View {
         let total = max(1, parts.reduce(Int64(0)) { $0 + $1.value })
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 10) {
-                CardHeading(title: "Where the tokens went",
-                            subtitle: includeCacheReads ? "\(Fmt.tokens(total)) tokens processed \(period.phrase), cache reads included."
-                                : "\(Fmt.tokens(total)) new tokens \(period.phrase).")
+                CardHeading(title: String(localized: "Where the tokens went"),
+                            subtitle: includeCacheReads ? period.processedTotal(Fmt.tokens(total)) : period.newTokensTotal(Fmt.tokens(total)))
                 Spacer(minLength: 0)
                 Toggle("Include cache reads", isOn: $includeCacheReads).toggleStyle(.switch).controlSize(.small)
             }
@@ -608,7 +627,7 @@ struct OverviewTokenMix: View {
                         }
                     }
                 }
-                if parts.isEmpty { Text("No tokens \(period.phrase).").foregroundStyle(.secondary) }
+                if parts.isEmpty { Text(period.noTokensLine).foregroundStyle(.secondary) }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -632,6 +651,14 @@ struct OverviewRanking: View {
     enum Tab: String, CaseIterable, Identifiable {
         case projects = "Projects", models = "Models", tools = "Tools"
         var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .projects: String(localized: "Projects")
+            case .models: String(localized: "Models")
+            case .tools: String(localized: "Tools")
+            }
+        }
     }
 
     fileprivate struct Row: Identifiable {
@@ -647,10 +674,10 @@ struct OverviewRanking: View {
         let total = max(1, data.current.tokens.freshTokens)
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                CardHeading(title: "What used the most",
-                            subtitle: tab == .projects ? "New tokens \(period.phrase). Click a project for details." : "New tokens \(period.phrase).")
+                CardHeading(title: String(localized: "What used the most"),
+                            subtitle: tab == .projects ? period.newTokensClickProjectLine : period.newTokensLine)
                 Spacer(minLength: 0)
-                Segments(title: "Group by", selection: $tab, items: Tab.allCases.map { ($0, $0.rawValue) })
+                Segments(title: String(localized: "Group by"), selection: $tab, items: Tab.allCases.map { ($0, $0.label) })
             }
             VStack(spacing: 4) {
                 ForEach(rows) { row in
@@ -658,7 +685,7 @@ struct OverviewRanking: View {
                         if let p = row.project { openProject = p }
                     }
                 }
-                if rows.isEmpty { Text("Nothing \(period.phrase).").foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
+                if rows.isEmpty { Text(period.nothingLine).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -677,22 +704,24 @@ struct OverviewRanking: View {
         case .projects:
             rows = data.projects.map { p in
                 let tools = (data.projectProviders[p.id] ?? []).map(model.toolName)
-                let sessions = "\(p.sessions) session" + (p.sessions == 1 ? "" : "s")
+                let sessions = OverviewLogic.sessionCount(p.sessions)
                 return Row(id: "p\(p.id)", name: p.name, fresh: p.tokens.freshTokens,
-                           sub: tools.isEmpty ? sessions : tools.joined(separator: " and ") + " · " + sessions,
+                           sub: tools.isEmpty ? sessions : OverviewLogic.list(tools) + " · " + sessions,
                            color: ChartColors.shared.color(for: "project:\(p.id)"), project: p)
             }
         case .models:
             rows = data.models.map { m in
-                Row(id: m.id, name: m.displayName, fresh: m.tokens.freshTokens, sub: "In \(model.toolName(m.provider)).",
+                let tool = model.toolName(m.provider)
+                return Row(id: m.id, name: m.displayName, fresh: m.tokens.freshTokens, sub: String(localized: "In \(tool)."),
                     color: ChartColors.shared.color(for: m.canonical))
             }
         case .tools:
             rows = data.products.map { r in
                 let name = r.product.map(model.productName) ?? model.toolName(r.provider)
-                let sessions = "\(r.sessions) session" + (r.sessions == 1 ? "" : "s")
+                let sessions = OverviewLogic.sessionCount(r.sessions)
+                let cost = Fmt.cost(r.cost)
                 return Row(id: r.id, name: name, fresh: r.tokens.freshTokens,
-                           sub: showCost ? sessions + " · \(Fmt.cost(r.cost)) at API prices" : sessions,
+                           sub: showCost ? sessions + " · " + String(localized: "\(cost) at API prices") : sessions,
                            color: model.providerColor(r.provider))
             }
         }
@@ -755,13 +784,13 @@ private struct ProjectSheet: View {
                 Text(project.name).font(.system(size: 17, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                fact("New tokens", Fmt.tokens(project.tokens.freshTokens))
-                fact("Share of all", "\(Int((Double(project.tokens.freshTokens) / Double(max(1, total)) * 100).rounded()))%")
-                fact("Sessions", "\(project.sessions)")
-                fact("Last active", OverviewLogic.lastActive(project.lastActivity, now: Date(), calendar: .current))
+                fact(String(localized: "New tokens"), Fmt.tokens(project.tokens.freshTokens))
+                fact(String(localized: "Share of all"), "\(Int((Double(project.tokens.freshTokens) / Double(max(1, total)) * 100).rounded()))%")
+                fact(String(localized: "Sessions"), "\(project.sessions)")
+                fact(String(localized: "Last active"), OverviewLogic.lastActive(project.lastActivity, now: Date(), calendar: .current))
             }
             if !tools.isEmpty {
-                Text("Used with \(tools.joined(separator: " and ")) \(period.phrase).").foregroundStyle(.secondary)
+                Text(period.usedWith(OverviewLogic.list(tools))).foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
                 Spacer()

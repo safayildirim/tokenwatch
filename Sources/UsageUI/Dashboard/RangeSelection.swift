@@ -4,6 +4,17 @@ import UsageCore
 enum RangePreset: String, CaseIterable, Identifiable {
     case last24h = "24 hours", last7d = "7 days", last30d = "30 days", last90d = "90 days", all = "All time", custom = "Custom"
     var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .last24h: String(localized: "24 hours")
+        case .last7d: String(localized: "7 days")
+        case .last30d: String(localized: "30 days")
+        case .last90d: String(localized: "90 days")
+        case .all: String(localized: "All time")
+        case .custom: String(localized: "Custom")
+        }
+    }
 }
 
 /// This is a calendar period chosen by the user, and the pages that offer date filtering share it.
@@ -39,7 +50,7 @@ struct RangePicker: View {
     var body: some View {
         HStack(spacing: 8) {
             Picker("Range", selection: $selection.preset) {
-                ForEach(RangePreset.allCases) { Text($0.rawValue).tag($0) }
+                ForEach(RangePreset.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.menu).labelsHidden().frame(width: 120)
             if selection.preset == .custom {

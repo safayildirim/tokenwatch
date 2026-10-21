@@ -72,7 +72,7 @@ public struct MenuBarContentView: View {
             Spacer()
             if model.collectorSnapshot.isSyncing {
                 ProgressView().controlSize(.small)
-                    .help(model.collectorSnapshot.progress.map { "Importing history: \(Int($0 * 100))%" } ?? "Updating")
+                    .help(model.collectorSnapshot.progress.map { String(localized: "Importing history: \(Int($0 * 100))%") } ?? String(localized: "Updating"))
             }
             Button { model.refreshNow() } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.borderless).help("Refresh usage (⌘R)").keyboardShortcut("r")
@@ -89,7 +89,7 @@ public struct MenuBarContentView: View {
                 Text("Totals will keep growing until the import finishes.").font(.caption2).foregroundStyle(.secondary)
             }
         } else if let source = snap.sources.first(where: { $0.state == .failing || $0.state == .degraded }) {
-            Label(source.lastError ?? "Collection problem in \(source.displayName)", systemImage: "exclamationmark.triangle.fill")
+            Label(source.lastError ?? String(localized: "Collection problem in \(source.displayName)"), systemImage: "exclamationmark.triangle.fill")
                 .font(.caption).foregroundStyle(Palette.warning)
         }
     }
@@ -106,7 +106,7 @@ public struct MenuBarContentView: View {
     @ViewBuilder private var providerSections: some View {
         let shown = shownProviders
         if shown.isEmpty {
-            Text(model.hasLoaded ? "No supported tool was found on this Mac. Usage appears here once you use Claude Code or Codex." : "Loading…")
+            (model.hasLoaded ? Text("No supported tool was found on this Mac. Usage appears here once you use Claude Code or Codex.") : Text("Loading…"))
                 .font(.caption).foregroundStyle(.secondary)
         }
         ForEach(shown, id: \.id) { provider in
@@ -157,7 +157,7 @@ public struct MenuBarContentView: View {
                     }.font(.subheadline)
                 }
             }
-            if model.providerUsage.isEmpty { Text(model.hasLoaded ? "No usage recorded yet." : "Loading…").font(.caption).foregroundStyle(.secondary) }
+            if model.providerUsage.isEmpty { (model.hasLoaded ? Text("No usage recorded yet.") : Text("Loading…")).font(.caption).foregroundStyle(.secondary) }
             Text("Token counts differ between providers and are shown side by side, not added up. Estimated cost is API-equivalent, not a subscription charge.")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
@@ -168,7 +168,7 @@ public struct MenuBarContentView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Recent sessions").font(.caption).foregroundStyle(.secondary)
             if model.recentSessions.isEmpty {
-                Text(model.hasLoaded ? "No sessions yet. They appear here automatically." : "Loading…")
+                (model.hasLoaded ? Text("No sessions yet. They appear here automatically.") : Text("Loading…"))
                     .font(.caption).foregroundStyle(.secondary).padding(.vertical, 6)
             }
             ForEach(model.recentSessions.prefix(5)) { s in

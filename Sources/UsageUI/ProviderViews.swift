@@ -46,8 +46,10 @@ struct FilterMenu<T: Hashable>: View {
     @Binding var selection: Set<T>
     var items: [(T, String)]
 
-    /// The title, then the one chosen item by name, or how many are chosen.
+    /// The title, then the one chosen item by name, or how many are chosen. Callers pass the English title, which is
+    /// looked up here, so every caller's title is translated the same way.
     private var label: String {
+        let title = NSLocalizedString(self.title, comment: "")
         if selection.isEmpty { return title }
         if selection.count == 1, let name = items.first(where: { selection.contains($0.0) })?.1 { return "\(title): \(name)" }
         return "\(title): \(selection.count)"
@@ -236,7 +238,7 @@ struct QuotaPoolCard: View {
                 Spacer()
             }
             if !compact, !pool.pool.products.isEmpty {
-                Text("Shared by " + ListFormatter.localizedString(byJoining: pool.pool.products.map(model.productName)) + ".")
+                Text("Shared by \(ListFormatter.localizedString(byJoining: pool.pool.products.map(model.productName))).")
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(pool.windows) { w in

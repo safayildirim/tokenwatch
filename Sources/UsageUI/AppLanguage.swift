@@ -76,7 +76,16 @@ public enum AppLanguage: String, CaseIterable, Identifiable {
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.createsNewApplicationInstance = true
             configuration.activates = true
-            configuration.arguments = [relaunchArgument]
+            // The new copy reopens the windows that are open now, so the restart lands where the user was.
+            let open = NSApplication.shared.windows.filter(\.isVisible).compactMap { $0.identifier?.rawValue }
+            var arguments = [relaunchArgument, "--show-settings"]
+            if open.contains(where: { $0.hasPrefix("dashboard") }) { arguments.append("--show-dashboard") }
+            configuration.arguments = arguments
+            // Since macOS 14 an app comes to the front only when the app in front lets it. This copy is in front, since
+            // the user just clicked in it, so it hands that over to the copy that replaces it.
+            if let bundleID = Bundle.main.bundleIdentifier {
+                NSApplication.shared.yieldActivation(toApplicationWithBundleIdentifier: bundleID)
+            }
             NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
                 Task { @MainActor in
                     if let error {

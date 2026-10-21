@@ -742,3 +742,6 @@
 "Nothing changed against yesterday by this time." = "Dünün bu saatine göre bir değişim yok.";
 "Nothing changed against the 7 days before." = "Önceki 7 güne göre bir değişim yok.";
 "Nothing changed against the 30 days before." = "Önceki 30 güne göre bir değişim yok.";
+"Restarting…" = "Yeniden başlatılıyor…";
+"Tokenwatch could not restart" = "Tokenwatch yeniden başlatılamadı";
+"Open Tokenwatch again to use the new language. (%@)" = "Yeni dili kullanmak için Tokenwatch'u yeniden açın. (%@)";

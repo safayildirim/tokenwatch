@@ -29,6 +29,14 @@ public struct MenuBarLabel: View {
             let args = CommandLine.arguments
             if args.contains("--show-dashboard") { openWindow(id: "dashboard") }
             if args.contains("--show-settings") { openWindow(id: "settings") }
+            // A menu bar app is not brought forward by its launch, so a copy started by a restart comes to the front
+            // itself, with the windows the user had open.
+            if AppLanguage.isRelaunch {
+                // Gives the windows a moment to appear, so that the settings window can be put in front of the dashboard.
+                try? await Task.sleep(for: .milliseconds(300))
+                DockPresence.windowAppeared()
+                NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("settings") == true }?.makeKeyAndOrderFront(nil)
+            }
             if let i = args.firstIndex(of: "--snapshots"), i + 1 < args.count {
                 await SnapshotRenderer.run(model: model, directory: URL(fileURLWithPath: args[i + 1]), dark: args.contains("--dark"))
                 NSApp.terminate(nil)

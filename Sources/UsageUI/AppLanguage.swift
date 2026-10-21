@@ -55,29 +55,52 @@ public enum AppLanguage: String, CaseIterable, Identifiable {
         else { UserDefaults.standard.set([rawValue], forKey: Self.key) }
     }
 
-    /// The argument that tells a new copy which process it replaces.
-    static let relaunchArgument = "--relaunch-after"
+    /// The argument that marks a copy started by `relaunch(model:)`.
+    static let relaunchArgument = "--relaunched"
 
-    /// Quits and opens the app again. macOS starts the new copy before this one quits: a helper process started from
-    /// here would belong to this app and be ended with it. The new copy is told to wait until this one has exited,
-    /// because a copy that starts while another holds the collector lock hands over to it and quits.
+    /// True in a copy that `relaunch(model:)` started.
+    public static var isRelaunch: Bool { CommandLine.arguments.contains(relaunchArgument) }
+
+    /// Quits and opens the app again, as Apple recommends: ask Launch Services for a new instance of the app, then
+    /// quit. A helper process started from here would not do, because it belongs to this app and is ended with it.
+    ///
+    /// The order matters because only one copy may collect. This copy first stops collecting and lets go of the
+    /// single-instance lock, and only then starts the new copy, which takes the lock at once. If the new copy had to
+    /// wait for this one to quit instead, it would stall its own launch, and this copy, waiting for that launch to
+    /// finish before quitting, would never quit: the new copy would give up and leave.
     @MainActor
-    static func relaunch() {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-        configuration.arguments = [relaunchArgument, String(ProcessInfo.processInfo.processIdentifier)]
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
-            Task { @MainActor in
-                // If the new copy could not be started, staying open is better than leaving the user with no app.
-                if error == nil { NSApplication.shared.terminate(nil) }
+    static func relaunch(model: AppModel) {
+        Task { @MainActor in
+            await model.shutdown()
+            SingleInstanceLock.held?.release()
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = true
+            configuration.activates = true
+            // The new copy reopens the windows that are open now, so the restart lands where the user was.
+            let open = NSApplication.shared.windows.filter(\.isVisible).compactMap { $0.identifier?.rawValue }
+            var arguments = [relaunchArgument, "--show-settings"]
+            if open.contains(where: { $0.hasPrefix("dashboard") }) { arguments.append("--show-dashboard") }
+            configuration.arguments = arguments
+            // Since macOS 14 an app comes to the front only when the app in front lets it. This copy is in front, since
+            // the user just clicked in it, so it hands that over to the copy that replaces it.
+            if let bundleID = Bundle.main.bundleIdentifier {
+                NSApplication.shared.yieldActivation(toApplicationWithBundleIdentifier: bundleID)
             }
+            NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+                Task { @MainActor in
+                    if let error {
+                        // This copy no longer collects, so it cannot carry on. It says why and quits.
+                        let alert = NSAlert()
+                        alert.messageText = String(localized: "Tokenwatch could not restart")
+                        alert.informativeText = String(localized: "Open Tokenwatch again to use the new language. (\(error.localizedDescription))")
+                        alert.runModal()
+                    }
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+            // Quits even if Launch Services never answers, so the user is not left with a copy that does not collect.
+            try? await Task.sleep(for: .seconds(10))
+            NSApplication.shared.terminate(nil)
         }
-    }
-
-    /// In a copy started by `relaunch()`, waits for the copy it replaces to exit, for at most ten seconds.
-    public static func waitForReplacedCopy(_ args: [String] = CommandLine.arguments) {
-        guard let i = args.firstIndex(of: relaunchArgument), i + 1 < args.count, let pid = pid_t(args[i + 1]) else { return }
-        let deadline = Date().addingTimeInterval(10)
-        while kill(pid, 0) == 0 && Date() < deadline { usleep(100_000) }
     }
 }

@@ -13,8 +13,12 @@ public struct DashboardView: View {
     public var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            List(DashboardSection.allCases, selection: $model.selection) { section in
-                Label(section.title, systemImage: section.symbol).tag(section)
+            List(selection: $model.selection) {
+                Section("Usage") {
+                    ForEach(DashboardSection.allCases) { section in
+                        Label(section.title, systemImage: section.symbol).tag(section)
+                    }
+                }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
             .safeAreaInset(edge: .bottom) { sidebarFooter }
@@ -34,7 +38,8 @@ public struct DashboardView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .top, spacing: 0) {
-                if model.selection.followsScope && model.openSessionID == nil {
+                // The overview has its own bar, which adds the period to the same filters.
+                if model.selection.followsScope && model.selection != .overview && model.openSessionID == nil {
                     VStack(spacing: 0) { ScopeBar(); Divider() }.background(.bar)
                 }
             }
@@ -43,12 +48,16 @@ public struct DashboardView: View {
         .frame(minWidth: 980, minHeight: 640)
         .toolbar {
             ToolbarItem {
-                Button { openWindow(id: "settings") } label: { Label("Settings", systemImage: "gearshape") }
-                    .help("Open Settings (⌘,)")
+                UpdatedLabel()
             }
             ToolbarItem {
                 Button { model.refreshNow() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .help("Check for new usage now").keyboardShortcut("r")
+                    .help("Check for new usage now (⌘R)").keyboardShortcut("r")
+                    .disabled(model.isCheckingNow)
+            }
+            ToolbarItem {
+                Button { openWindow(id: "settings") } label: { Label("Settings", systemImage: "gearshape") }
+                    .help("Open Settings (⌘,)")
             }
         }
         .onAppear { DockPresence.windowAppeared() }
@@ -61,16 +70,45 @@ public struct DashboardView: View {
             if snap.isSyncing, let p = snap.progress {
                 ProgressView(value: p) { Text("Importing…").font(.caption) }
             } else {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Image(systemName: snap.sources.contains { $0.state == .failing } ? "xmark.octagon.fill"
                           : (snap.sources.contains { $0.state != .ok } ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"))
                         .foregroundStyle(snap.sources.contains { $0.state != .ok } ? Palette.warning : Palette.good)
-                    Text(snap.sources.contains { $0.state != .ok } ? "Collection issue" : "Collecting").font(.caption)
+                    Text(collectingText(snap)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func collectingText(_ snap: CollectorSnapshot) -> String {
+        if snap.sources.contains(where: { $0.state != .ok }) { return "Collection issue" }
+        guard let last = model.latestActivity else { return "Collecting" }
+        let time = Calendar.current.isDateInToday(last) ? last.formatted(date: .omitted, time: .shortened)
+            : last.formatted(date: .abbreviated, time: .shortened)
+        return "Collecting · last file read at \(time)"
+    }
+}
+
+/// Says how fresh the figures are, or that a refresh the user asked for is still checking.
+struct UpdatedLabel: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            Text(text(now: ctx.date)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
+
+    private func text(now: Date) -> String {
+        if model.isCheckingNow { return "Checking for new usage…" }
+        guard let at = model.lastUpdatedAt else { return "" }
+        let age = now.timeIntervalSince(at)
+        if age < 60 { return "Updated just now" }
+        if age < 3600 { return "Updated \(Int(age / 60)) min ago" }
+        return "Updated " + Fmt.relative(at, now: now)
     }
 }
 

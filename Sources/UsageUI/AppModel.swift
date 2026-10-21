@@ -12,27 +12,27 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .overview: "Overview"
-        case .trends: "Usage Trends"
+        case .trends: "Trends"
         case .sessions: "Sessions"
         case .projects: "Projects"
         case .models: "Models"
         case .cost: "Cost"
-        case .quota: "Quota"
+        case .quota: "Limits"
         case .providers: "Providers"
         case .diagnostics: "Diagnostics"
         }
     }
     var symbol: String {
         switch self {
-        case .overview: "gauge.with.dots.needle.33percent"
-        case .trends: "chart.xyaxis.line"
-        case .sessions: "list.bullet.rectangle"
+        case .overview: "square.grid.2x2"
+        case .trends: "chart.line.uptrend.xyaxis"
+        case .sessions: "bubble.left"
         case .projects: "folder"
         case .models: "cpu"
         case .cost: "dollarsign.circle"
-        case .quota: "hourglass"
-        case .providers: "square.stack.3d.up"
-        case .diagnostics: "stethoscope"
+        case .quota: "gauge.with.needle"
+        case .providers: "cylinder.split.1x2"
+        case .diagnostics: "waveform.path.ecg"
         }
     }
     /// Pages whose figures follow the dashboard scope.
@@ -108,6 +108,14 @@ public final class AppModel {
     public private(set) var openReport: DatabaseOpenReport
     /// Increases whenever stored data may have changed, so that open pages know to reload.
     public private(set) var dataVersion = 0
+    /// When the figures were last recomputed, for the "Updated" line of the dashboard.
+    public private(set) var lastUpdatedAt: Date?
+    /// True while a refresh that the user asked for is checking files and quota sources.
+    public private(set) var isCheckingNow = false
+    /// True once the user has hidden the notice about the hidden menu bar icon. It holds until the app quits.
+    public var menuBarNoticeDismissed = false
+    /// The quota warning on the overview that the user dismissed. A warning about another window or cycle still shows.
+    public var dismissedLimitWarning: String?
 
     // MARK: Navigation
 
@@ -312,7 +320,10 @@ public final class AppModel {
 
     /// User-initiated refresh: re-checks files, quota sources and the registry, then recomputes.
     public func refreshNow() {
+        guard !isCheckingNow else { return }
+        isCheckingNow = true
         Task {
+            defer { isCheckingNow = false }
             await collector.reconcileNow(reason: "manual")
             await quota.refresh(force: true)
             await liveness.rescan()
@@ -335,6 +346,7 @@ public final class AppModel {
             lastHeavyReload = Date()
             lastHeavyDuration = lastHeavyReload.timeIntervalSince(started)
             heavyStale = false
+            lastUpdatedAt = lastHeavyReload
         } else {
             heavyStale = true
         }
@@ -579,6 +591,17 @@ public final class AppModel {
         let report = await notifications.sendTest()
         notificationProblem = report.problem
         notificationPermission = await notifications.permission()
+    }
+
+    /// Looks at the menu bar icon now instead of waiting for the next periodic check. Returns true when it is visible.
+    @discardableResult
+    public func recheckMenuBarIcon() -> Bool {
+        guard let hidden = StatusItemProbe.isHidden() else { return !menuBarIconHidden }
+        if menuBarIconHidden != hidden {
+            menuBarIconHidden = hidden
+            DockPresence.persistent = settings.showDockIcon || hidden
+        }
+        return !hidden
     }
 
     // MARK: Navigation helpers

@@ -74,7 +74,7 @@ public struct ExportService: Sendable {
                     .text(s.externalID), .text(s.provider.rawValue), .text(s.productID.rawValue), .text(s.accountLabel),
                     .text(s.surface?.rawValue ?? ""), .text(s.kind.rawValue),
                     .text(s.projectName), .text(s.projectPath ?? ""),
-                    .text(s.models.joined(separator: "; ")), .text(s.status.label),
+                    .text(s.models.joined(separator: "; ")), .text(s.status.exportLabel),
                     .text(s.startedAt.map(Self.iso) ?? ""), .text(s.lastActivityAt.map(Self.iso) ?? ""),
                     s.duration.map { .real($0) } ?? .null, .int(Int64(s.requests)),
                     .int(s.tokens.uncachedInput), .int(s.tokens.output), .int(s.tokens.cacheRead),

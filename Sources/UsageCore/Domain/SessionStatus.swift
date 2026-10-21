@@ -7,7 +7,18 @@ public enum SessionState: String, Sendable, Codable, CaseIterable {
     case completed
     case unknown
 
+    /// The state in the user's language, for the interface.
     public var label: String {
+        switch self {
+        case .active: String(localized: "Active")
+        case .idle: String(localized: "Idle")
+        case .completed: String(localized: "Completed")
+        case .unknown: String(localized: "Unknown")
+        }
+    }
+
+    /// The state in English, for exports, whose values must not depend on the language of the app.
+    public var exportLabel: String {
         switch self {
         case .active: "Active"
         case .idle: "Idle"
@@ -34,7 +45,13 @@ public struct SessionStatus: Sendable, Equatable, Codable {
         self.basis = basis
     }
 
-    public var label: String { basis == .inferred && state != .unknown ? "\(state.label) (inferred)" : state.label }
+    public var label: String {
+        let state = self.state.label
+        return basis == .inferred && self.state != .unknown ? String(localized: "\(state) (inferred)") : state
+    }
+
+    /// The status in English, for exports.
+    public var exportLabel: String { basis == .inferred && state != .unknown ? "\(state.exportLabel) (inferred)" : state.exportLabel }
 }
 
 /// A process that Claude Code has registered as running a session.

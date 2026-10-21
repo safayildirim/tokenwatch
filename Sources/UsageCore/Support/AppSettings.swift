@@ -57,11 +57,11 @@ public enum MenuBarDisplayMode: Hashable, Sendable, Codable, Identifiable {
 
     public func label(providers: [ProviderDefinition]) -> String {
         switch self {
-        case .iconOnly: "Icon only"
-        case .quota(let id): (providers.first { $0.id == id }?.shortName ?? id.rawValue) + " quota"
-        case .allProviders: "Quota of every provider"
-        case .highestUtilization: "Highest utilization"
-        case .activeSessions: "Active session count"
+        case .iconOnly: String(localized: "Icon only")
+        case .quota(let id): String(localized: "\(providers.first(where: { $0.id == id })?.shortName ?? id.rawValue) quota")
+        case .allProviders: String(localized: "Quota of every provider")
+        case .highestUtilization: String(localized: "Highest utilization")
+        case .activeSessions: String(localized: "Active session count")
         }
     }
 }

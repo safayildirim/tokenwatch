@@ -141,15 +141,15 @@ public enum WindowNaming {
             return fallbackKey.replacingOccurrences(of: "_", with: " ").capitalized
         }
         switch m {
-        case 60: return "Hourly"
-        case 300: return "5-hour"
-        case 1440: return "Daily"
-        case 10080: return "Weekly"
-        case 43200, 43800, 44640: return "Monthly"
+        case 60: return String(localized: "Hourly")
+        case 300: return String(localized: "5-hour")
+        case 1440: return String(localized: "Daily")
+        case 10080: return String(localized: "Weekly")
+        case 43200, 43800, 44640: return String(localized: "Monthly")
         default:
-            if m % 1440 == 0 { return "\(m / 1440)-day" }
-            if m % 60 == 0 { return "\(m / 60)-hour" }
-            return "\(m)-minute"
+            if m % 1440 == 0 { return String(localized: "\(m / 1440)-day") }
+            if m % 60 == 0 { return String(localized: "\(m / 60)-hour") }
+            return String(localized: "\(m)-minute")
         }
     }
 
@@ -157,13 +157,13 @@ public enum WindowNaming {
     public static func shortName(minutes: Int?, fallbackKey: String) -> String {
         guard let m = minutes else { return fallbackKey.replacingOccurrences(of: "_", with: " ").capitalized }
         switch m {
-        case 10080: return "Week"
-        case 1440: return "Day"
-        case 43200, 43800, 44640: return "Month"
+        case 10080: return String(localized: "Week")
+        case 1440: return String(localized: "Day")
+        case 43200, 43800, 44640: return String(localized: "Month")
         default:
-            if m % 1440 == 0 { return "\(m / 1440)d" }
-            if m % 60 == 0 { return "\(m / 60)h" }
-            return "\(m)m"
+            if m % 1440 == 0 { return String(localized: "\(m / 1440)d") }
+            if m % 60 == 0 { return String(localized: "\(m / 60)h") }
+            return String(localized: "\(m)m")
         }
     }
 

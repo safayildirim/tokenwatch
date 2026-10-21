@@ -12,6 +12,18 @@ extension AppModel {
     func providerSymbol(_ id: ProviderID) -> String { db.registry.provider(id)?.symbol ?? "sparkles" }
     func sourceName(_ id: TelemetrySourceID) -> String { db.registry.source(id)?.name ?? id.rawValue }
 
+    /// The color that stands for a provider in every chart and legend.
+    func providerColor(_ id: ProviderID) -> Color {
+        Palette.provider(at: db.registry.providers.firstIndex { $0.id == id } ?? -1)
+    }
+
+    /// The name of the tools through which a provider's usage reaches this Mac, such as a coding agent's name. It
+    /// falls back to the provider's own name before any of its products has recorded anything.
+    func toolName(_ id: ProviderID) -> String {
+        let products = filterOptions.products.filter { db.registry.providerOf(product: $0) == id }
+        return products.isEmpty ? providerName(id) : ListFormatter.localizedString(byJoining: products.map(productName))
+    }
+
     /// True when a pool has no figure yet because the user can still switch on the way to get one.
     func needsSetup(_ pool: QuotaPoolInfo) -> Bool { pool.key.provider == .anthropic && !claudeHelperInstalled }
 
@@ -31,6 +43,13 @@ struct FilterMenu<T: Hashable>: View {
     @Binding var selection: Set<T>
     var items: [(T, String)]
 
+    /// The title, then the one chosen item by name, or how many are chosen.
+    private var label: String {
+        if selection.isEmpty { return title }
+        if selection.count == 1, let name = items.first(where: { selection.contains($0.0) })?.1 { return "\(title): \(name)" }
+        return "\(title): \(selection.count)"
+    }
+
     var body: some View {
         Menu {
             ForEach(items, id: \.0) { item in
@@ -39,7 +58,7 @@ struct FilterMenu<T: Hashable>: View {
             }
             if !selection.isEmpty { Divider(); Button("Clear") { selection = [] } }
         } label: {
-            Text(selection.isEmpty ? title : "\(title): \(selection.count)")
+            Text(label)
         }
         .menuStyle(.button).fixedSize()
         .disabled(items.isEmpty)

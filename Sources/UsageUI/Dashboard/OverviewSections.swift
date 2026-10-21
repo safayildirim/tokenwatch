@@ -2,7 +2,7 @@ import SwiftUI
 import UsageCore
 
 /// A section title with an optional note beside it, which moves under the title when the window is narrow.
-private struct SectionHeading: View {
+struct SectionHeading: View {
     var title: String
     var note: String?
 
@@ -26,7 +26,7 @@ private struct SectionHeading: View {
 }
 
 /// The title and subtitle at the top of a card.
-private struct CardHeading: View {
+struct CardHeading: View {
     var title: String
     var subtitle: String
 
@@ -39,7 +39,7 @@ private struct CardHeading: View {
 }
 
 /// The large figure of a tile, in the rounded face with digits of equal width.
-private func figure(_ text: String, size: CGFloat) -> Text {
+func figure(_ text: String, size: CGFloat) -> Text {
     Text(text).font(.system(size: size, weight: .semibold, design: .rounded)).monospacedDigit()
 }
 
@@ -305,7 +305,7 @@ struct OverviewGlance: View {
         }
     }
 
-    fileprivate struct Tile {
+    struct Tile {
         var label: String
         var value: String
         var sub: String
@@ -348,7 +348,7 @@ struct OverviewGlance: View {
     }
 }
 
-private struct StatTile: View {
+struct StatTile: View {
     var tile: OverviewGlance.Tile
 
     var body: some View {

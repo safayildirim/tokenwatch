@@ -82,7 +82,7 @@ struct OverviewPage: View {
                     importCard
                     menuBarNotice
                     if isEmpty {
-                        if model.scope.isActive { noMatchNotice } else { noUsageNotice }
+                        UsageEmptyState()
                     } else {
                         TimelineView(.periodic(from: .now, by: 30)) { ctx in
                             OverviewLimits(pools: visiblePools, now: ctx.date)
@@ -103,7 +103,7 @@ struct OverviewPage: View {
                                 OverviewRanking(period: period, data: data, showCost: model.settings.showEstimatedCost)
                             }
                         }
-                        Text("Counts come from the local files that \(toolList(conjunction: .and)) write on this Mac. Chat apps and other devices leave no record here, so these totals can be lower than what your accounts really used. Limits are the exception: they come from the providers and include everything.")
+                        Text("Counts come from the local files that \(model.sessionToolList(.and)) write on this Mac. Chat apps and other devices leave no record here, so these totals can be lower than what your accounts really used. Limits are the exception: they come from the providers and include everything.")
                             .font(.caption).foregroundStyle(.secondary).frame(maxWidth: 820, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                         if let loadError {
@@ -330,26 +330,31 @@ struct OverviewPage: View {
             iconCheck = model.recheckMenuBarIcon() ? .back : .idle
         }
     }
+}
 
-    // MARK: Empty states
+// MARK: - Empty states
 
-    private var noUsageNotice: some View {
-        let tools = toolList(conjunction: .or)
-        return emptyPanel(symbol: "tray", title: String(localized: "No usage yet"),
-                          message: String(localized: "Usage appears here as soon as \(tools) writes a session on this Mac. There is nothing to set up.")) {
-            Button("Check Again") { model.refreshNow() }.disabled(model.isCheckingNow)
+/// What a page shows when there is no usage to show: none recorded at all, or none that matches the filters.
+struct UsageEmptyState: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if model.scope.isActive {
+            let summary = model.scope.summary(registry: model.db.registry, options: model.filterOptions)
+            panel(symbol: "line.3.horizontal.decrease.circle", title: String(localized: "Nothing matches these filters"),
+                  message: String(localized: "There is no usage for \(summary). Pick another combination or clear the filters.")) {
+                Button("Clear Filters") { model.scope = DashboardScope() }
+            }
+        } else {
+            let tools = model.sessionToolList(.or)
+            panel(symbol: "tray", title: String(localized: "No usage yet"),
+                  message: String(localized: "Usage appears here as soon as \(tools) writes a session on this Mac. There is nothing to set up.")) {
+                Button("Check Again") { model.refreshNow() }.disabled(model.isCheckingNow)
+            }
         }
     }
 
-    private var noMatchNotice: some View {
-        let summary = model.scope.summary(registry: model.db.registry, options: model.filterOptions)
-        return emptyPanel(symbol: "line.3.horizontal.decrease.circle", title: String(localized: "Nothing matches these filters"),
-                          message: String(localized: "There is no usage for \(summary). Pick another combination or clear the filters.")) {
-            Button("Clear Filters") { model.scope = DashboardScope() }
-        }
-    }
-
-    private func emptyPanel<B: View>(symbol: String, title: String, message: String, @ViewBuilder button: () -> B) -> some View {
+    private func panel<B: View>(symbol: String, title: String, message: String, @ViewBuilder button: () -> B) -> some View {
         VStack(spacing: 8) {
             Image(systemName: symbol).font(.system(size: 30, weight: .light)).foregroundStyle(.secondary)
             Text(title).font(.system(size: 15, weight: .semibold))
@@ -361,15 +366,16 @@ struct OverviewPage: View {
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08)))
     }
+}
 
-    private enum Conjunction { case and, or }
+enum ListConjunction { case and, or }
 
+extension AppModel {
     /// The tools that write the session files this app reads, such as "Claude Code and Codex".
-    private func toolList(conjunction: Conjunction) -> String {
-        let registry = model.db.registry
+    func sessionToolList(_ conjunction: ListConjunction) -> String {
         var names: [String] = []
-        for source in registry.sources where source.kind == .sessionLogs {
-            for product in source.products where !names.contains(model.productName(product)) { names.append(model.productName(product)) }
+        for source in db.registry.sources where source.kind == .sessionLogs {
+            for product in source.products where !names.contains(productName(product)) { names.append(productName(product)) }
         }
         guard let last = names.popLast() else { return String(localized: "your coding tools") }
         if names.isEmpty { return last }

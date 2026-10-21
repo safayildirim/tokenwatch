@@ -38,8 +38,8 @@ public struct DashboardView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .top, spacing: 0) {
-                // The overview has its own bar, which adds the period to the same filters.
-                if model.selection.followsScope && model.selection != .overview && model.openSessionID == nil {
+                // The overview and the trends page have their own bar, which adds the period to the same filters.
+                if model.selection.followsScope && model.selection != .overview && model.selection != .trends && model.openSessionID == nil {
                     VStack(spacing: 0) { ScopeBar(); Divider() }.background(.bar)
                 }
             }

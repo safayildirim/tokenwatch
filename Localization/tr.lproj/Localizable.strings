@@ -711,3 +711,34 @@
 "System Default" = "Sistem Varsayılanı";
 "Tokenwatch shows the new language after it restarts." = "Tokenwatch yeni dili yeniden başladıktan sonra gösterir.";
 "Restart Now" = "Şimdi Yeniden Başlat";
+
+/* Trends */
+"Times are in your local time zone. Providers count tokens in their own ways, so their figures are shown side by side and never treated as equal work." = "Saatler yerel saat diliminizdedir. Sağlayıcılar tokenları kendi yöntemleriyle sayar; bu yüzden rakamları yan yana gösterilir ve hiçbir zaman eşit iş olarak ele alınmaz.";
+"Uncached input, cache writes and output." = "Önbelleksiz girdi, önbellek yazmaları ve çıktı.";
+"Everything the models read and wrote, cache reads included." = "Modellerin okuduğu ve yazdığı her şey, önbellek okumaları dahil.";
+"In 1 session." = "1 oturumda.";
+"In %lld sessions." = "%lld oturumda.";
+"Over time" = "Zaman içinde";
+"View" = "Görünüm";
+"Chart" = "Grafik";
+"%@ per hour, today." = "Bugün saat başına %@.";
+"%@ per day, last 7 days." = "Son 7 günde gün başına %@.";
+"%@ per day, last 30 days." = "Son 30 günde gün başına %@.";
+"Split by" = "Ayrıştır";
+"Sessions are counted per hour or day, so they cannot be split." = "Oturumlar saat ya da gün başına sayıldığı için ayrıştırılamaz.";
+"Not reached yet." = "Henüz gelmedi.";
+"Nothing in this period." = "Bu dönemde bir şey yok.";
+"Hour" = "Saat";
+"Token type" = "Token türü";
+"Biggest changes by provider" = "Sağlayıcıya göre en büyük değişimler";
+"Biggest changes by model" = "Modele göre en büyük değişimler";
+"Biggest changes by project" = "Projeye göre en büyük değişimler";
+"%@ now · %@ before" = "şimdi %1$@ · önce %2$@";
+"New" = "Yeni";
+"None now" = "Artık yok";
+"Compared with yesterday by this time." = "Dünün bu saatine kadarki kullanımla karşılaştırılır.";
+"Compared with the 7 days before." = "Önceki 7 günle karşılaştırılır.";
+"Compared with the 30 days before." = "Önceki 30 günle karşılaştırılır.";
+"Nothing changed against yesterday by this time." = "Dünün bu saatine göre bir değişim yok.";
+"Nothing changed against the 7 days before." = "Önceki 7 güne göre bir değişim yok.";
+"Nothing changed against the 30 days before." = "Önceki 30 güne göre bir değişim yok.";

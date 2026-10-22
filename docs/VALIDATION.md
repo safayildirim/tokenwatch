@@ -1,8 +1,8 @@
 # Validation and test results
 
-## 1. Automated tests: 307 tests, 0 failures
+## 1. Automated tests: 348 tests (285 core executed, 63 UI compiled)
 
-`swift test` (about 2 minutes). Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
+`swift test --skip UsageUITests` runs **285 core tests in about 36 seconds, with 0 failures**. The UI target compiles all 63 `UsageUITests`; the full UI suite was not rerun for this change. Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
 
 | Area | Suite (tests) | What it proves |
 |---|---|---|
@@ -39,9 +39,21 @@
 | Codex lineage and mixed formats | `CodexLineageTests` (16) | A fork is recognized by what its lines say, so a response the child makes 900 ms after the fork is counted and a slow copy (3 s) is not. Without the parent's file the fork falls back to its time and says so, and the notice is replaced when the file is read again. A fork of a record session repeats response ids and is attributed to the thread that made them, in either read order. A file that mixes event-only and record parts counts every response once, whichever of event and record comes first. A compaction request without an event is counted once, and also when only the marker has it. A thread counter that grew more than its records is reported and not invented. A counter reset invents nothing. Unrelated runs with identical figures are two requests. A response seen by two products of one provider is one request. An active and an archived copy are one session. A changed file format is reported. |
 | Quota freshness | `QuotaFreshnessTests` (11), `StatusLineFirstSightTests` (3) | Reading an old file again, touching it, copying it and rebuilding the database never make a reading fresh. Cycles 53 s apart are not merged. A lower reading that arrives later does not replace the higher one of its cycle, and a new cycle does not inherit the old value. Account switches keep both accounts. Future-dated readings are not recorded and a clock moved back gives stale, not new. Claude readings survive restart and rewrite unchanged. The real helper dates a first sight with the transcript's modification time, and does not re-date remaining windows when one drops out at its reset. |
 | OpenAI prices | `OpenAIPricingTests` (9) | Published prices applied per category. Reasoning priced once. A price change applies from its day and earlier usage keeps the earlier price. Derived cards are labelled and counted. The 272,000-token boundary. Fast, priority and flex tiers, and an unknown tier is unpriced. A model before its launch, an unlisted name, `codex-auto-review` and a dated snapshot are unpriced. A user price wins and is labelled. The catalog has no duplicates. |
-| Reliability | `AcceleratedSoakTests` (1), `LiveLatencyTests` (1) | 45 simulated days with restarts, compression, archiving, a folder outage, forks and damaged lines stay exact. Nine concurrent sessions reach the database in 0.31 s. |
+| Reliability | `AcceleratedSoakTests` (1), `LiveLatencyTests` (1) | 45 simulated days with restarts, compression, archiving, a folder outage, forks and damaged lines stay exact. Nine concurrent sessions reached the database in about 0.35 s on the final run. |
 | Delivery and start-up | `NotificationServiceTests` (8), `SingleInstanceTests` (3) | Notifications are shown when allowed, permission is asked once, a denial, an app without a bundle and a refusal by macOS are each reported in words. A second copy cannot take the lock, and a crashed holder never keeps a later launch out. |
 | Menu bar | `AppModelTests` (+1) | A window that has just reset shows a dash and never the weekly figure in its place. |
+
+### Added by subscription capacity analytics (26 tests)
+
+| Area | Suite | What it proves |
+|---|---|---|
+| Quota arithmetic and direction | `CapacityTests` | A plan that spends 10 % where the base spends 20 % has 2.0× capacity, never 0.5×. Equal work and equal ratios are stable. Matched cycles are one-to-one. A single pair is provisional and publishes no ratio. Evidence levels require independent cycles, not readings. Outliers are excluded only with enough remaining cycles, and their ids are recorded. |
+| Plan attribution and history | `CapacityTests` | Half-open periods, adjacent plans, gaps, spanning overlaps and provider/account isolation. Unknown plans are valid but produce no comparison. A correction changes the period without changing raw snapshots. Identical start times are rejected. Ambiguous histories disable comparisons rather than guessing identity; conflicting labels are a separate explicit identity state. |
+| Quota analysis | `CapacityTests` | Five-hour and weekly windows are analyzed separately. A lower reading inside a cycle is skipped, never treated as a reset. A cycle change starts a new sample. A plan change inside an interval, an overlapping pair of cycles, and a cycle that produced eligible intervals for two plans are excluded with explicit reasons. Multiple intervals in one cycle become one sample. |
+| Measurements | `CapacityTests` | A measurement uses the reading-to-reading span, not the labelled wall-clock times. It snaps to the surrounding readings, detects a plan edited after capture, and excludes an open measurement as still open. The store requires a plan and a known window, and allows one open measurement per account/pool/window. |
+| Rebuild, erase and export | `CapacityTests`, `ExportTests` | A transcript rebuild preserves quota history, plan periods, prices and measurements. Erasing collected data removes measurements and plan assignments but keeps price configuration. Capacity evidence exports with units, methods, exclusions and outlier ids, and carries no conversation text. |
+| Determinism and performance | `CapacityPerformanceTests` | A deterministic fixture of 60 independent five-hour cycles, 12,000 requests and two plans produces a 4.0× estimate. One on-demand report takes **0.046 s** in a debug build; the report is bounded by the requested range and does not run on file events. |
+| UI | `RenderTests` | The real Capacity Analysis page is included in the all-pages render pass and the empty-state pass. It uses the same scope bar, Swift Charts reference lines and quality labels as the rest of the dashboard. |
 
 Fixtures that no longer represented correct behavior were corrected and no assertion was weakened. The fork fixtures now repeat the parent's lines in the same positions, as real files do, where they used different positions and relied on the time window; the "model without a price" fixture uses a model that is really unlisted, since the former default model is now priced; the helper test evaluates a reading at the current time, because the helper dates readings with the real clock and a reading dated after the evaluation time is rejected on purpose.
 
@@ -120,9 +132,11 @@ Every page, the popover, session details and settings were rendered by the real 
 | 12 | Dashboard supports session, model and project analysis | Met |
 | 13 | History survives restarts | Met |
 | 14 | Imports and live updates do not noticeably impact macOS | Met. 5.9 s and 28 MB for 4.75 GB; about 0.05 to 0.25 % CPU idle |
-| 15 | Tests cover critical accounting and lifecycle | Met. 307 tests |
+| 15 | Tests cover critical accounting and lifecycle | Met. 348 tests (285 core executed, 63 UI compiled) |
 | 16 | Long runs without leaks or duplicates | Flat memory over minutes, an accelerated 45-day run, idempotence tests. A multi-day soak was not run |
 | 17 | Documented install and build | Met. README |
+| 18 | Subscription capacity analysis is observed, bounded and evidence-gated | Met in the core and offscreen UI. 26 capacity tests, a 0.046 s report over 60 cycles / 12,000 requests, and no computation on file events. A real multi-week plan history was not available to produce a live 20x-versus-5x result |
+| 19 | Plan history survives upgrades, downgrades, corrections and unknown plans; ambiguous identity is unsupported | Met by store and engine tests. Overlaps, conflicting labels and edited captured plans disable the comparison instead of guessing |
 
 ## 4. Live validation of the installed app (2026-10-20)
 
@@ -133,7 +147,7 @@ Done with the real installed app, driven through the macOS accessibility interfa
 * **Single instance.** A second copy of the binary exits within three seconds and the first keeps running.
 * **Menu bar.** The status item exists and its popover opens (a click through accessibility) and shows both providers with the right state: Claude "unavailable", two OpenAI pools (a named account and the unassigned one), the five-hour window as "reset 3d 17h ago, the new value appears after OpenAI next reports it" and the weekly window as 3 % and stale. **Defect found and fixed:** the menu bar title said "O 3%*", which was the weekly figure shown as if it were the short window. It now says "O –".
 * **The icon is not visible on this Mac's menu bar.** The item sits inside the notch (its position is x 829 to 908 on a screen whose notch covers 771 to 956), the app detects this and says so in a banner. This cannot be fixed by the app. Free some menu bar space.
-* **Dashboard.** The window opens from the Applications folder, its sidebar lists all nine pages, and Overview, Cost, Quota, Providers and Diagnostics show the real figures (Cost with the new "not a subscription charge" notice and a "Prices" column). The provider scope filter changes the Overview from 369 M to 3.01 M tokens and back. The minimum window size is enforced. Two accounts of one provider appear as two pools.
+* **Dashboard.** The window opens from the Applications folder, its sidebar lists every page (ten now, including Capacity), and Overview, Cost, Quota, Providers and Diagnostics show the real figures (Cost with the new "not a subscription charge" notice and a "Prices" column). The provider scope filter changes the Overview from 369 M to 3.01 M tokens and back. The minimum window size is enforced. Two accounts of one provider appear as two pools.
 * **Settings.** The theme choice is stored (the database holds `"appearance":"dark"`) and restored. **Defect found and fixed:** the seven tabs were folded into an overflow menu at the window's width, so they are now a segmented control.
 * **Notification permission.** The flow was exercised for real: macOS answered the first request with a denial, the settings tab showed "Turned off in System Settings > Notifications", the test button reported "Notifications are turned off for this app", and an "Open Notification Settings" button appeared.
 * **Launch at login.** Enabled and verified (above).

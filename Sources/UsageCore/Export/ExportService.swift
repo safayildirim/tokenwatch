@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ExportKind: String, CaseIterable, Sendable, Identifiable {
-    case sessions, requests, projects, models, daily, weekly, quotaHistory
+    case sessions, requests, projects, models, daily, weekly, quotaHistory, capacityEvidence
     public var id: String { rawValue }
     public var label: String {
         switch self {
@@ -12,6 +12,7 @@ public enum ExportKind: String, CaseIterable, Sendable, Identifiable {
         case .daily: "Daily totals"
         case .weekly: "Weekly totals"
         case .quotaHistory: "Quota history"
+        case .capacityEvidence: "Capacity evidence"
         }
     }
 }
@@ -144,6 +145,77 @@ public struct ExportService: Sendable {
                 }
             }
             for s in snapshots { try sink.write(s); rows += 1 }
+        case .capacityEvidence:
+            columns = Self.capacityColumns
+            try sink.begin(columns)
+            let from = filter.from ?? Date(timeIntervalSince1970: 0)
+            let to = max(filter.to ?? Date(), from)
+            let report = try CapacityAnalyticsEngine.report(db, range: from...to)
+            for account in report.accounts {
+                for period in account.planPeriods where
+                    period.effectiveFrom <= to && (period.effectiveTo ?? .distantFuture) >= from {
+                    try sink.write(Self.capacityRow(
+                        type: "plan_period", provider: account.provider, account: account.accountLabel,
+                        pool: account.poolKey, windowKey: "", windowMinutes: nil, plan: period.planKey ?? "",
+                        periodStart: period.effectiveFrom, periodEnd: period.effectiveTo, cycleID: nil,
+                        cycleResetsAt: nil, cyclePeak: nil, intervalFrom: nil, intervalTo: nil,
+                        deltaPercent: nil, requests: nil, tokens: nil, costPico: nil, modelMix: "",
+                        estimation: "", evidence: period.provenance.rawValue, ratio: nil, exclusions: [:],
+                        note: period.note))
+                }
+                for window in account.windows {
+                    for cycle in window.history.cycles {
+                        try sink.write(Self.capacityRow(
+                            type: "quota_cycle", provider: account.provider, account: account.accountLabel,
+                            pool: account.poolKey, windowKey: window.windowKey, windowMinutes: window.windowMinutes,
+                            plan: window.samples.filter { $0.cycleID == cycle.id }.map(\.planKey).sorted().joined(separator: "+"),
+                            periodStart: nil, periodEnd: nil, cycleID: cycle.id, cycleResetsAt: cycle.resetsAt,
+                            cyclePeak: cycle.peakPercent, intervalFrom: cycle.firstObservedAt, intervalTo: cycle.lastObservedAt,
+                            deltaPercent: nil, requests: nil, tokens: nil, costPico: nil, modelMix: "",
+                            estimation: "", evidence: cycle.isCompleteWindow ? "complete" : "observed",
+                            ratio: nil, exclusions: [:], note: ""))
+                    }
+                    for interval in window.history.intervals {
+                        let exclusions = Dictionary(grouping: interval.exclusions, by: { $0 }).mapValues(\.count)
+                        let mix = interval.workload.modelShares().sorted { $0.value > $1.value }
+                            .map { "\($0.key)=\(String(format: "%.3f", $0.value))" }.joined(separator: ";")
+                        try sink.write(Self.capacityRow(
+                            type: "interval", provider: account.provider, account: account.accountLabel,
+                            pool: account.poolKey, windowKey: window.windowKey, windowMinutes: window.windowMinutes,
+                            plan: interval.planKey ?? "", periodStart: nil, periodEnd: nil, cycleID: interval.cycleID,
+                            cycleResetsAt: interval.resetsAt, cyclePeak: nil, intervalFrom: interval.from,
+                            intervalTo: interval.to, deltaPercent: interval.deltaPercent,
+                            requests: interval.workload.requests, tokens: interval.workload.tokens.totalProcessed,
+                            costPico: interval.workload.cost.picoUSD, modelMix: mix,
+                            estimation: "", evidence: interval.isEligible ? "usable" : "excluded",
+                            ratio: nil, exclusions: exclusions, note: ""))
+                    }
+                    for estimate in window.estimates {
+                        try sink.write(Self.capacityRow(
+                            type: "estimate", provider: account.provider, account: account.accountLabel,
+                            pool: account.poolKey, windowKey: window.windowKey, windowMinutes: window.windowMinutes,
+                            plan: "\(estimate.basePlanKey)->\(estimate.otherPlanKey)", periodStart: nil, periodEnd: nil,
+                            cycleID: nil, cycleResetsAt: nil, cyclePeak: nil, intervalFrom: nil, intervalTo: nil,
+                            deltaPercent: nil, requests: nil, tokens: nil, costPico: nil, modelMix: "",
+                            estimation: estimate.method?.rawValue ?? "", evidence: estimate.level.rawValue,
+                            ratio: estimate.ratio, exclusions: estimate.exclusions, note: Self.capacityEstimateNote(estimate)))
+                    }
+                }
+                for review in account.measurements {
+                    try sink.write(Self.capacityRow(
+                        type: "measurement", provider: account.provider, account: account.accountLabel,
+                        pool: account.poolKey, windowKey: review.measurement.windowKey,
+                        windowMinutes: review.measurement.windowMinutes, plan: review.measurement.planKey ?? "",
+                        periodStart: review.measurement.startedAt, periodEnd: review.measurement.endedAt,
+                        cycleID: review.cycleID, cycleResetsAt: review.baseline?.resetsAt,
+                        cyclePeak: nil, intervalFrom: review.baseline?.observedAt, intervalTo: review.ending?.observedAt,
+                        deltaPercent: review.deltaPercent, requests: review.workload.requests,
+                        tokens: review.workload.tokens.totalProcessed, costPico: review.workload.cost.picoUSD,
+                        modelMix: "", estimation: "", evidence: review.isUsable ? "usable" : "excluded",
+                        ratio: nil, exclusions: Dictionary(grouping: review.exclusions, by: { $0 }).mapValues(\.count),
+                        note: "\(review.measurement.label) (\(review.measurement.state.rawValue))"))
+                }
+            }
         }
         try sink.finish(metadata: Self.metadata(kind: kind, columns: columns, range: range, rows: rows, calendar: calendar))
         return ExportResult(url: url, rows: rows)
@@ -318,6 +390,72 @@ public struct ExportService: Sendable {
         Column(name: "authority", unit: "", definition: "authoritative or unverified."),
     ]
 
+    static let capacityColumns: [Column] = [
+        Column(name: "record_type", unit: "", definition: "plan_period, quota_cycle, interval, estimate, or measurement."),
+        Column(name: "provider", unit: "", definition: "The provider whose quota is described."),
+        Column(name: "account", unit: "", definition: "The stored account label. A label is metadata, not a verified identity."),
+        Column(name: "pool", unit: "", definition: "The quota pool. Pools are never combined."),
+        Column(name: "window", unit: "", definition: "The quota window key."),
+        Column(name: "window_minutes", unit: "minutes", definition: "The window length, when fixed."),
+        Column(name: "plan", unit: "", definition: "The plan key, or base->other for an estimate."),
+        Column(name: "period_start", unit: "ISO 8601 UTC", definition: "Start of a manual plan period or labelled measurement."),
+        Column(name: "period_end", unit: "ISO 8601 UTC", definition: "Exclusive end of a plan period, or the labelled end of a measurement."),
+        Column(name: "cycle_id", unit: "", definition: "The provider quota cycle row this observation belongs to."),
+        Column(name: "cycle_resets_at", unit: "ISO 8601 UTC", definition: "The reset time the provider reported for the cycle."),
+        Column(name: "cycle_peak_percent", unit: "percent", definition: "The highest utilization observed in the cycle. Never inferred from tokens."),
+        Column(name: "interval_from", unit: "ISO 8601 UTC", definition: "When the earlier percentage was first observed."),
+        Column(name: "interval_to", unit: "ISO 8601 UTC", definition: "End of the paired observation: when the later percentage was first observed."),
+        Column(name: "delta_percent", unit: "percentage points", definition: "Observed increase in quota utilization between the two readings."),
+        Column(name: "requests", unit: "requests", definition: "Local requests attributed to the interval."),
+        Column(name: "work_tokens", unit: "tokens", definition: "Total processed tokens in the attributed local work."),
+        Column(name: "work_cost_usd", unit: "USD", definition: "API-equivalent list cost of the local work. A normalization proxy, not a subscription charge."),
+        Column(name: "model_mix", unit: "", definition: "Share of API-equivalent cost by canonical model."),
+        Column(name: "estimation", unit: "", definition: "matchedCycles or pooledStandardizedWork."),
+        Column(name: "evidence", unit: "", definition: "usable, excluded, complete, observed, the policy evidence level, or manual/providerReported for a plan period."),
+        Column(name: "ratio", unit: "multiple", definition: "Estimated capacity of the other plan divided by the base plan."),
+        Column(name: "exclusions", unit: "", definition: "Semicolon-separated reason=count entries. Every rejected observation carries a reason."),
+        Column(name: "note", unit: "", definition: "A short human-readable note, including sensitivity and sample size for estimates."),
+    ]
+
+    private static func capacityRow(type: String, provider: ProviderID, account: String, pool: String,
+                                    windowKey: String, windowMinutes: Int?, plan: String,
+                                    periodStart: Date?, periodEnd: Date?, cycleID: Int64?,
+                                    cycleResetsAt: Date?, cyclePeak: Double?, intervalFrom: Date?,
+                                    intervalTo: Date?, deltaPercent: Double?, requests: Int?, tokens: Int64?,
+                                    costPico: Int64?, modelMix: String, estimation: String, evidence: String,
+                                    ratio: Double?, exclusions: [CapacityExclusion: Int], note: String) -> [Cell] {
+        let reasonText = exclusions.sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { "\($0.key.rawValue)=\($0.value)" }.joined(separator: ";")
+        return [.text(type), .text(provider.rawValue), .text(account), .text(pool), .text(windowKey),
+                windowMinutes.map { .int(Int64($0)) } ?? .null, .text(plan),
+                periodStart.map { .text(iso($0)) } ?? .null, periodEnd.map { .text(iso($0)) } ?? .null,
+                cycleID.map { .int($0) } ?? .null, cycleResetsAt.map { .text(iso($0)) } ?? .null,
+                cyclePeak.map { .real($0) } ?? .null, intervalFrom.map { .text(iso($0)) } ?? .null,
+                intervalTo.map { .text(iso($0)) } ?? .null, deltaPercent.map { .real($0) } ?? .null,
+                requests.map { .int(Int64($0)) } ?? .null, tokens.map { .int($0) } ?? .null,
+                costPico.map { .text(usd($0)) } ?? .null, .text(modelMix), .text(estimation),
+                .text(evidence), ratio.map { .real($0) } ?? .null, .text(reasonText), .text(note)]
+    }
+
+    private static func capacityEstimateNote(_ estimate: CapacityEstimate) -> String {
+        var parts: [String] = []
+        parts.append("base_cycles=\(estimate.baseCycles)")
+        parts.append("other_cycles=\(estimate.otherCycles)")
+        parts.append("matched_pairs=\(estimate.matchedPairs)")
+        if let pooled = estimate.pooledRatio { parts.append(String(format: "pooled_ratio=%.3f", pooled)) }
+        if let sensitivity = estimate.sensitivityRange {
+            parts.append(String(format: "sensitivity=%.3f...%.3f", sensitivity.lowerBound, sensitivity.upperBound))
+        }
+        if let provisional = estimate.provisionalRatio { parts.append(String(format: "provisional_ratio=%.3f", provisional)) }
+        if !estimate.outlierCycleIDs.isEmpty {
+            parts.append("outlier_cycles=" + estimate.outlierCycleIDs.map(String.init).joined(separator: ","))
+        }
+        if let cosine = estimate.comparability.modelCosineSimilarity {
+            parts.append(String(format: "model_cosine=%.3f", cosine))
+        }
+        return parts.joined(separator: ";")
+    }
+
     private static func metadata(kind: ExportKind, columns: [Column], range: ClosedRange<Date>?, rows: Int, calendar: Calendar) -> [String: Any] {
         var m: [String: Any] = [
             "export": kind.rawValue,
@@ -326,6 +464,7 @@ public struct ExportService: Sendable {
             "rows": rows,
             "pricing_note": "Cost columns are API-equivalent estimates from published list prices (\(PricingCatalog.asOfSummary)). They are not subscription charges.",
             "quota_note": "Subscription utilization is only ever taken from values reported by the provider. It is never computed from token counts, and the utilization of different pools is never added together.",
+            "capacity_note": "Capacity rows contain observations and estimates. The ratio is the estimated capacity of the other plan divided by the base plan: quota percentage points per API-equivalent USD of local work, base over other. API-equivalent cost is a normalization proxy, not a subscription charge. A plan period is metadata, not a provider-verified identity.",
             "privacy_note": "Contains usage metadata only. No prompts, responses, source code or credentials.",
             "columns": columns.map { ["name": $0.name, "unit": $0.unit, "definition": $0.definition] },
         ]

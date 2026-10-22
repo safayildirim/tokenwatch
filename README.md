@@ -5,6 +5,7 @@ A native macOS menu bar app that watches your AI coding usage in the background,
 * **Local-first.** No network access. Only usage metadata is stored: token counts, model names, timestamps, project folder names, session ids. Never prompts, replies, file contents, environment variables or credentials.
 * **Exact.** Token totals match an independent recount of the original files to the token (see [VALIDATION](docs/VALIDATION.md)). Streaming snapshots, replays after compaction and forked sub-agents are deduplicated, so cache tokens are not counted two to three times over.
 * **Honest about quota.** Percentages come only from the provider's own reports (Claude's `rate_limits`, Codex's `rate_limits` snapshots). They are never derived from token counts, they belong to one pool of one account, and pools are never added together. When nothing has been reported, the app says "Unavailable". ChatGPT Chat and Claude chat cannot be observed, and the app says that too.
+* **Honest about plans.** Capacity Analysis compares how much provider-reported quota the same normalized local work consumed on different subscription plans. It publishes a ratio only with enough independent quota cycles, and otherwise says the evidence is insufficient. Advertised multipliers are labeled references, never measurements. Weekly multipliers are not advertised and are not invented.
 * **Light.** About 75 MB resident and well under 1 % CPU when idle. A 5.8 GB history (Claude and Codex) imports in about 8 seconds. (With the dashboard open beside a streaming session, about 1 % CPU.)
 
 | Menu bar popover | Dashboard overview |
@@ -66,6 +67,7 @@ Settings → General chooses what the menu bar shows next to the icon: icon only
 | Projects / Models | Aggregates with trends. Double-click a project to see its sessions |
 | Cost | API-equivalent estimates per provider and model, with unpriced usage called out |
 | Quota | Every pool by provider and account, with each window, history, the products that are not observable, setup, and what the numbers mean |
+| Capacity Analysis | Which subscription plan delivered more capacity for the same normalized work: plan timeline, measured ratios with price-based and advertised reference lines (2.0× and 4.0× for the Claude five-hour comparison), evidence quality, five-hour and weekly windows separately, and a purchasing comparison (for Claude, two Max 5x subscriptions versus one Max 20x) |
 | Providers | Per provider: products, data sources and their health, quota pools, and a **capability matrix** of what each source reports |
 | Diagnostics | Database checks, **independent verification against the source files** (both providers), rebuild, resource use, recent problems |
 
@@ -80,6 +82,20 @@ A **scope bar** above every page filters by provider, product, account and surfa
 **Claude (one minute).** Claude Code reports subscription usage only to a configured status line. Open **Settings → Quota → Install helper…** (or the Quota page). The app shows exactly what it will change, makes a backup of `~/.claude/settings.json`, adds a `statusLine` entry without disturbing anything else, and keeps any status line you already have working. Then start a new terminal Claude Code session and send a message; quota appears.
 
 Details, limits and manual setup: [QUOTA](docs/QUOTA.md). Quota can only be reported while a terminal Claude Code session is in use, and only for subscribers.
+
+### Capacity analysis
+
+Open **Capacity Analysis** and record which plan was active over each period (upgrades and downgrades
+are separate, non-overlapping periods; "unknown" is allowed). All Claude readings belong to the
+explicit unassigned account because the status line names no account, so the app never guesses that
+two readings are the same subscription. The more independent five-hour or weekly cycles you have on
+each plan, the stronger the evidence; at least two independent cycles per plan and either two matched
+pairs or a comparable pooled comparison are required before a ratio is shown.
+
+The ratio is measured from provider percentages and local work normalized by API-equivalent cost. It
+is not derived from tokens, and the advertised five-hour multipliers are shown only as references.
+The page includes the exact evidence level, exclusions, method, and a purchasing comparison. Full
+method and limitations: [CAPACITY](docs/CAPACITY.md).
 
 ### Notifications
 
@@ -117,7 +133,7 @@ Use `--db PATH`, `--root PATH` (Claude) and `--codex-home PATH` (Codex) to work 
 swift test
 ```
 
-307 tests: token accounting and deduplication for both providers, Codex file shapes (event, usage-record, fork, compacted, compressed, damaged, archived), OpenAI quota (pools, windows, cycles, freshness, out-of-order, shared pool), alert identity, provider isolation and a made-up third provider through the whole pipeline, session discovery (including real FSEvents), persistence and concurrency, calendar and DST boundaries, cost, OpenAI prices, quota freshness under replays and restarts, Codex forks and mixed file formats, an accelerated run of weeks of use, notification delivery, single-instance start-up, export, privacy, the app's state machine, and offscreen rendering of every page in light and dark. Results and what each group proves: [VALIDATION](docs/VALIDATION.md).
+348 tests: token accounting and deduplication for both providers, Codex file shapes (event, usage-record, fork, compacted, compressed, damaged, archived), OpenAI quota (pools, windows, cycles, freshness, out-of-order, shared pool), alert identity, provider isolation and a made-up third provider through the whole pipeline, session discovery (including real FSEvents), persistence and concurrency, calendar and DST boundaries, cost, OpenAI prices, quota freshness under replays and restarts, Codex forks and mixed file formats, subscription-capacity arithmetic, plan history, evidence policy and purchasing strategies, an accelerated run of weeks of use, notification delivery, single-instance start-up, export, privacy, the app's state machine, and offscreen rendering of every page in light and dark. Results and what each group proves: [VALIDATION](docs/VALIDATION.md).
 
 ## Privacy and security
 
@@ -132,6 +148,7 @@ swift test
 * [Architecture and source audit (capability matrix)](docs/ARCHITECTURE.md)
 * [Token accounting rules](docs/TOKEN-ACCOUNTING.md)
 * [Quota integration and limitations](docs/QUOTA.md)
+* [Subscription capacity methodology](docs/CAPACITY.md)
 * [Database schema, integrity and migrations](docs/SCHEMA.md)
 * [OpenAI: Codex, Codex Desktop and ChatGPT Work](docs/OPENAI-CODEX.md)
 * [Source adapters and adding a provider](docs/SOURCE-ADAPTERS.md)

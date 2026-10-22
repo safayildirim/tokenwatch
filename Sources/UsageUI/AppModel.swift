@@ -7,7 +7,7 @@ import UserNotifications
 import UsageCore
 
 public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
-    case overview, trends, sessions, projects, models, cost, quota, providers, diagnostics
+    case overview, trends, sessions, projects, models, cost, quota, capacity, providers, diagnostics
     public var id: String { rawValue }
     var title: String {
         switch self {
@@ -18,6 +18,7 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .models: String(localized: "Models")
         case .cost: String(localized: "Cost")
         case .quota: String(localized: "Limits")
+        case .capacity: String(localized: "Capacity")
         case .providers: String(localized: "Providers")
         case .diagnostics: String(localized: "Diagnostics")
         }
@@ -31,6 +32,7 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
         case .models: "cpu"
         case .cost: "dollarsign.circle"
         case .quota: "gauge.with.needle"
+        case .capacity: "chart.bar.xaxis"
         case .providers: "cylinder.split.1x2"
         case .diagnostics: "waveform.path.ecg"
         }
@@ -38,7 +40,7 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Hashable {
     /// Pages whose figures follow the dashboard scope.
     var followsScope: Bool {
         switch self {
-        case .overview, .trends, .sessions, .projects, .models, .cost, .quota: true
+        case .overview, .trends, .sessions, .projects, .models, .cost, .quota, .capacity: true
         case .providers, .diagnostics: false
         }
     }

@@ -137,7 +137,7 @@ final class RenderTests: XCTestCase {
         let env = try UIEnv()
         await env.model.start()
         await env.waitUntil { env.model.hasLoaded }
-        for section in [DashboardSection.overview, .trends, .sessions, .projects, .models] {
+        for section in [DashboardSection.overview, .trends, .sessions, .projects, .models, .capacity] {
             env.model.selection = section
             let rep = try await renderOrFail(DashboardView().environment(env.model), size: CGSize(width: 1240, height: 800), wait: 1)
             XCTAssertGreaterThan(inkRatio(rep), 0.003, "\(section) should explain that there is no data")

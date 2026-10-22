@@ -79,6 +79,22 @@ Each `token_count` carries `rate_limits`: `limit_id`, `plan_type`, and up to two
 * **Two accounts have two pools, and their percentages are never added or merged.** The menu bar's "highest utilization" is a comparison, not a sum.
 * ChatGPT Chat has a pool in the registry that is marked not observable. It never receives a figure.
 
+
+## Capacity analysis
+
+Codex's `rate_limits` also carries `plan_type`. It is stored as pool metadata so the UI can show what
+the source reported, but it is **not** a capacity measurement and this build ships no OpenAI
+subscription plan definitions. The Capacity Analysis page therefore offers no OpenAI plan comparison:
+there is no plan key, reference price or documented multiplier to compare. Plan history still works
+for OpenAI, including an explicit unknown plan, but without registered plans a comparison is empty
+rather than inferred from `plan_type`.
+
+The capacity core is provider-agnostic. If OpenAI plans are added later, they must arrive as
+`SubscriptionPlanDefinition` registry values and the comparison must still be built from authoritative
+Codex quota snapshots plus local normalized work. A `plan_type` string is never converted into a quota
+percentage, a multiplier, or an account identity, and Codex and Claude pools are never compared with
+each other. See [CAPACITY.md](CAPACITY.md).
+
 ## Validation on this Mac's real data
 
 `tw verify --provider openai` recounts every session by Codex's own running counters (see above), with a different parser (Foundation JSON instead of the streaming scanner) and a different method (growth of a counter instead of per-response figures):

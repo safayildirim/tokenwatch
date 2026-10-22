@@ -123,3 +123,37 @@ The baseline measured the app with no window. With the dashboard open beside a s
 ### Accelerated reliability run
 
 `AcceleratedSoakTests` runs 45 simulated days in under three seconds through the real collector, database and both adapters: sessions of both formats grow, forks are made, files are compressed with `zstd` and archived the way Codex does, the app is stopped without a clean shutdown and reopened, the Codex folder disappears for a day while Claude Code keeps working, and damaged lines are written. Every total equals what was generated, nothing is stored twice, the integrity check passes and both independent recounts agree. **This is not equivalent to running for days.** A real multi-day soak is a separate pending item.
+
+## Capacity analytics
+
+Capacity analysis is an **on-demand read path**. It adds no timer, no FSEvents observer and no
+per-event work. The Capacity Analysis page loads a report when it is first shown, when the selected
+range or scope changes, or when the user explicitly recomputes. A file event updates quota and usage
+as before; it does not run the estimator.
+
+Measured with `CapacityPerformanceTests` on a deterministic fixture:
+
+```
+cycles=60  requests=12,000  plans=2  seconds=0.046   (debug test build)
+```
+
+The fixture contains 60 independent five-hour cycles (30 per plan), two authoritative snapshots per
+cycle, 200 local requests per cycle and enough priced work to satisfy the evidence policy. The report
+returns 60 cycle samples and a 4.0× matched estimate.
+
+What bounds the cost:
+
+* snapshots are selected by `observed_at` (indexed) for the requested range;
+* local requests are selected once per window by `requested_at` (indexed), not once per interval;
+* interval construction and work distribution are a single ordered pass; requests are never copied
+  into per-interval arrays;
+* a cycle sample is one aggregate, not one row per reading;
+* estimates are O(samples × plans²) with samples bounded by the cycles in the range;
+* the report stores only the requested range's snapshots, aggregates and measurements, plus the
+  account's plan history and the current price quotes used for the strategy comparison. It creates
+  no table, trigger or cache.
+
+The UI runs the report on a background task. A range or scope change starts a new generation and
+discards any older report that arrives late, so the page cannot show a stale result. With the page
+closed there is no capacity work at all, and idle CPU/memory are unchanged from the measurements
+above.

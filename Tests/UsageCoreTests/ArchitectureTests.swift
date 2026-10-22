@@ -100,6 +100,19 @@ final class ArchitectureIsolationTests: XCTestCase {
             XCTAssertNotNil(r.provider(source.provider))
             for product in source.products { XCTAssertEqual(r.providerOf(product: product), source.provider) }
         }
+        XCTAssertEqual(Set(r.plans.map(\.id)).count, r.plans.count, "plan keys are unique per provider")
+        for plan in r.plans {
+            XCTAssertNotNil(r.provider(plan.provider), plan.id)
+            XCTAssertGreaterThanOrEqual(plan.monthlyPriceMicros, 0, plan.id)
+            for (minutes, multiplier) in plan.nominalMultipliers {
+                XCTAssertGreaterThan(minutes, 0, plan.id)
+                XCTAssertTrue(multiplier.isFinite && multiplier > 0, plan.id)
+            }
+        }
+        XCTAssertEqual(r.plans(of: .anthropic).map(\.key).sorted(),
+                       ["claude-max-20x", "claude-max-5x", "claude-pro"])
+        XCTAssertNil(r.plan(provider: .anthropic, key: "claude-max-20x")?.nominalMultiplier(minutes: 10_080),
+                     "a five-hour multiplier never implies a weekly one")
         // ChatGPT Chat is a product with a pool of its own and no source.
         XCTAssertNotNil(r.product(.chatGPTChat))
         XCTAssertTrue(r.sources.allSatisfy { !$0.products.contains(.chatGPTChat) })

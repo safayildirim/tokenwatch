@@ -34,8 +34,10 @@ The smallest refactor that makes these first-class was a **redesign of the singl
 | Quota window | One limit inside a pool, identified by length | `300m`, `10080m`, `1440m` |
 | Cycle | The period between two resets of a window | |
 | Quota snapshot | A reported utilization inside a cycle | 63 % at 14:02 |
+| Plan period | A half-open period in which one account was on one subscription plan, with manual or provider-reported provenance | Max 5x from 1 Aug to 14 Sep |
+| Capacity measurement | An optional labelled window over existing readings and local work | "Max 20x, two weeks of client work" |
 
-Quota pools are shared across products and per account: ChatGPT Work and Codex draw on one pool, Claude Code and Claude chat on one pool, and ChatGPT Chat has a different pool that is explicitly not observable. The relationships are registry data (`pool_membership`), not code.
+Quota pools are shared across products and per account: ChatGPT Work and Codex draw on one pool, Claude Code and Claude chat on one pool, and ChatGPT Chat has a different pool that is explicitly not observable. The relationships are registry data (`pool_membership`), not code. Plan periods and capacity measurements are **annotations**, not observations: they describe what a person says about a subscription and never alter a quota percentage or a token count.
 
 ## 3. Anthropic source audit (Claude)
 
@@ -98,6 +100,7 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 │                                                                         Quota · CostReport · Agent             │
 │  Persistence               FileSynchronizer (checkpoints, zstd) ──► IngestWriter + EntityResolver ──► SQLite   │
 │  Analytics                 AnalyticsEngine · CostSQL/Pricing · ExportService                                    │
+│  Capacity                  SubscriptionPlans · QuotaHistoryAnalyzer · CapacityEstimator · CapacityStrategy       │
 │  Quota                     QuotaStore (pool/window/cycle/snapshot) · QuotaCoordinator(QuotaFeed) · QuotaEvaluator│
 │                            AlertEngine (account · pool · window · cycle)                                       │
 │  Verification              SourceVerifier (Claude) · CodexVerifier — independent recounts                       │
@@ -112,8 +115,9 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 | Normalization | `UsageMeasurement`, `RequestObservation`, `SessionObservation`, `QuotaObservation`, `NormalizedBatch` |
 | Persistence | `UsageDatabase`, `Schema`, `IngestWriter`, `EntityResolver`, `QuotaStore` |
 | Analytics | `AnalyticsEngine`, `PricingCatalog`, `CostSQL`, `ExportService` |
+| Capacity | `CapacityAnalyticsEngine`, `QuotaHistoryAnalyzer`, `CapacityEstimator`, `CapacityStrategy`, `PlanHistoryStore`, `PlanPriceStore`, `CapacityMeasurementStore` |
 | Quota | `QuotaCoordinator`, `QuotaFeed`, `QuotaEvaluator`, `QuotaStateReader`, `AlertEngine` |
-| Presentation | `UsageUI` |
+| Presentation | `UsageUI` (including `CapacityPage`) |
 
 ### Targets
 
@@ -144,3 +148,66 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 * **One collector:** the first copy takes a lock in the data folder, a second copy brings the first forward and exits, and the lock is released by the system when the process ends, however it ends.
 * **Whole-file sources:** a source that must read a file from the top (Codex) commits one file at a time, so an interruption leaves nothing half-counted. What it could not settle exactly is saved as accounting notes that replace the file's previous ones.
 * **Failure containment:** each source adapter and each file has its own error boundary. A failure is recorded with a message, retried with exponential backoff (5 s doubling to 15 min, with jitter), and surfaced in Diagnostics. Other sources continue.
+
+## 8. Subscription capacity analytics
+
+Capacity analysis is an **on-demand read path**, not a collector and not a second accounting
+system. It answers one narrow question: *given two periods of provider-reported quota consumption,
+was the same normalized local work cheaper or more expensive in quota terms on one plan than the
+other?* The full method and its limits are in [CAPACITY.md](CAPACITY.md).
+
+### Data flow
+
+```
+quota_snapshot (authoritative only) ─┐
+plan_assignment (half-open periods)  ├─► QuotaHistoryAnalyzer ─► CapacityEstimator ─► CapacityAnalyticsEngine
+model_request (local work) ──────────┘        intervals + cycles       ratios            report + strategies
+plan_price (dated user prices) + registry references ─────────────────────────────► CapacityStrategy
+capacity_measurement (optional annotation) ────────────────────────────────────────► measurement review
+```
+
+The analyzer reads snapshots once and local requests once per window, groups requests by cycle and
+distributes them to intervals in a single ordered pass. It creates no tables, no triggers and no
+stored aggregates. Every report is bounded by the requested date range, and the page shows only the
+accounts in the selected scope. A file event never triggers it: the capacity page loads when shown,
+when the range changes, or when the user asks to recompute. Idle overhead is therefore unchanged
+from the rest of the app.
+
+### Provider isolation
+
+`CapacityAnalyticsEngine`, `QuotaHistoryAnalyzer`, `CapacityEstimator` and `CapacityStrategy` contain
+no provider names and no provider-specific branches. Plans are registry values
+(`SubscriptionPlanDefinition`), and the UI supplies the strategies it wants to compare (for Claude:
+two Max 5x subscriptions versus one Max 20x). A provider with no registered plans still gets plan
+history and measurement support, but no capacity comparison. The architecture test that forbids
+provider names in generic files includes the capacity directory.
+
+### Invariants
+
+* **Observed stays observed.** Only authoritative quota snapshots participate. A percentage is never
+  computed from tokens, and a provider percentage is never replaced by an estimate.
+* **Windows stay separate.** `300m` and `10080m` are analyzed independently. Cycles are never merged
+  across a reset, and an interval belongs to exactly one cycle.
+* **Cycles are the unit of evidence.** Readings inside a cycle are summed into one sample; matched
+  pairs are one-to-one. A cycle that produced eligible intervals for more than one plan is dropped
+  rather than counted as two independent cycles. A busy afternoon cannot become twenty experiments.
+* **Unknown is a valid answer.** Missing plan periods, ambiguous account identity, insufficient
+  cycles, incomparable workloads and unpriced work all produce explicit exclusions or an empty
+  report, never a fabricated ratio.
+* **Manual metadata is labelled.** A plan period records `manual` or `providerReported` provenance;
+  the unassigned account and a manual account label are never treated as verified identity.
+* **Nothing is mutated by analysis.** Capacity reads quota history and requests; it never rewrites
+  them. Measurements and plan periods are edited only through their own stores.
+* **Rebuild-safe.** Quota history, plan periods, prices and measurements survive a transcript
+  rebuild. "Delete all collected data" removes measurements and plan assignments but keeps price
+  configuration.
+
+### UI
+
+The Capacity Analysis page lives in `UsageUI` and uses Swift Charts. It shows the account and plan
+timeline, a ratio chart with equal-cost and advertised reference lines (2.0× and 4.0× for the
+Claude five-hour comparison at reference prices; the weekly chart has only the price-based line
+because the provider publishes no weekly multiplier), cycle samples
+and exclusions, matched-pair and pooled methods, efficiency per dollar, purchasing strategies, and an
+evidence-quality card with identity, sample counts, exclusions and outlier ids. It uses the same
+scope bar as the rest of the dashboard and never adds provider-specific conditions to the generic core.

@@ -122,6 +122,28 @@ Read on 2026-10-20 from OpenAI's pricing page and changelog (developers.openai.c
 
 Long-context prices (above 272,000 prompt tokens), the `fast` tier and the `flex` tier are in `Sources/UsageCore/Pricing/OpenAIPricing.swift`. The derived cards have no long-context tier. The changelog gives days, not hours, so a request within a day of a change can be priced by the neighbouring card. **Not priced:** `codex-auto-review` (not a published model; 291 requests, 6.55 M tokens on this Mac), a model name with a dated suffix such as `gpt-5.5-2026-04-24` (OpenAI prices some snapshots differently from their alias, so the exact name is the key), and any name not in the table. Coverage on this Mac's history: 6 of 7 observed model names priced, 98.7 % of OpenAI tokens, about US$186 API-equivalent in total.
 
+## Normalized work for capacity analysis
+
+Capacity analysis needs a common yardstick for local work across plans and model mixes. It uses
+**API-equivalent list cost**, in exact pico-USD, for four reasons:
+
+1. It accounts for input, output, cache reads, cache writes and the model that produced them in one
+   number that is comparable across models and providers.
+2. It is already exact and deterministic: dated price cards make a past estimate reproducible.
+3. It does not pretend to be the subscription's own metering. The provider's reported percentage is
+   the only quota quantity; cost only says how much observed work that percentage bought.
+4. It is honest about missing data. If less than 95 % of an interval's processed tokens are priced,
+   the interval is excluded rather than normalized by a fallback guess.
+
+The normalization does **not** turn tokens into a quota percentage, and it does not use an
+advertised plan multiplier to scale work. Tokens remain stored in their categories. The capacity
+module also records request count, cache-read share, output share and model-cost shares, because two
+intervals are only compared when their composition is similar. See
+[CAPACITY.md](CAPACITY.md#5-normalized-local-work).
+
+The cost is **not** the subscription price. A $100 Max plan and $200 of API-equivalent work are
+different quantities, and no page presents one as the other.
+
 ## Canonical measurement and per-provider normalization
 
 Providers report usage differently, so each adapter converts what its source says into one canonical measurement before anything is stored. After that, no other code needs to know where a number came from.

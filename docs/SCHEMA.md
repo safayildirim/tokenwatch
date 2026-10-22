@@ -28,17 +28,22 @@ The database is `~/Library/Application Support/Tokenwatch/usage.sqlite` (SQLite,
 | `quota_window` | A window of a pool, keyed by length | `UNIQUE(pool_id, window_key)` |
 | `quota_cycle` | One period between resets | |
 | `quota_snapshot` | A reported utilization in a cycle, with first-observed and last-confirmed times, source, originating session and authority | `UNIQUE(window_id, cycle_id, utilization_pct, authority)` |
+| `plan_assignment` | A half-open period `[effective_from, effective_to)` in which one account was on one subscription plan. `plan_key` may be `NULL` (unknown) and `effective_to` may be `NULL` (open) | FK to `account`; no overlapping periods per account (enforced transactionally); `UNIQUE(provider_id, account_id, effective_from)` |
+| `plan_price` | Dated monthly **user** prices per plan. A user price at or before a date overrides the registry reference; the registry supplies the reference value itself | PK `(provider_id, plan_key, effective_from)` |
+| `capacity_measurement` | An optional labelled measurement period over existing quota readings and local work. Stores the plan captured at start and an `open` / `closed` / `abandoned` state | `plan_assignment_id` FK with `ON DELETE SET NULL`; at most one open period per `(account, pool, window)` |
 | `price_rate` | Dated rate cards per provider and model | `UNIQUE(provider_id, model_key, effective_from, prompt_min, speed)` |
 | `setting`, `alert_fired`, `ingest_issue` | Preferences, delivered alerts, a capped ring of collection problems | |
 
-Indexes cover the analytical paths: `model_request(requested_at)`, `(session_id, requested_at)`, `(model_id, requested_at)`, `(api_request_id)`, and the session indexes on project, activity and start.
+Indexes cover the analytical paths: `model_request(requested_at)`, `(session_id, requested_at)`, `(model_id, requested_at)`, `(api_request_id)`, the session indexes on project, activity and start, `quota_snapshot(observed_at)`, and the capacity timeline and measurement indexes.
+
+`plan_assignment`, `plan_price` and `capacity_measurement` are **manual annotations over observations**, not observations themselves. They never feed token totals or provider quota percentages. See [CAPACITY.md](CAPACITY.md).
 
 ## Integrity guarantees
 
 * **Atomic ingestion.** A batch of observations and the checkpoint offset that produced them commit in one `BEGIN IMMEDIATE` transaction. A crash leaves the database exactly at a checkpoint.
 * **Idempotent operations.** Every write is an upsert with the commutative merge rules described in [TOKEN-ACCOUNTING.md](TOKEN-ACCOUNTING.md). Re-reading a file, replaying events, or restarting changes nothing.
 * **Immutable observations.** Request rows are only ever merged upward by those rules; they are never edited by aggregation. There are no stored aggregates: every total is a query over `model_request`, so nothing can drift.
-* **Reconstructable.** Everything except quota history, settings and alert state is derived from the original log files. "Rebuild from source" (Diagnostics) clears the derived tables and re-imports; a corrupted database is handled the same way automatically.
+* **Reconstructable.** Token usage, sessions, projects and models are derived from the original log files. "Rebuild from source" (Diagnostics) clears those derived tables and re-imports. Quota history and manual capacity annotations are **not** transcript-derived, so they are preserved. A corrupted database is handled the same way automatically.
 * **Foreign keys** are enforced; `PRAGMA foreign_key_check` is part of the tests.
 * **Concurrency.** One serialized writer connection plus four read-only connections. WAL means readers never block, and a test runs three readers against a writer committing 60 batches and asserts no reader error and a never-shrinking count.
 
@@ -50,10 +55,10 @@ Indexes cover the analytical paths: `model_request(requested_at)`, `(session_id,
 
 ## Migration strategy
 
-`PRAGMA user_version` holds the schema version. `Schema.migrations` is an ordered, **append-only** list; each migration runs in its own transaction at launch for every version above the stored one. The multi-provider redesign edited the single initial migration in place, because the application was still in development and had no data to preserve (a database from the Claude-only build must be deleted). From the first release on, a schema change is a new appended migration. Built-in prices are reinstalled automatically when the catalog's fingerprint changes, leaving user-defined rows alone.
+`PRAGMA user_version` holds the schema version. `Schema.migrations` is an ordered, **append-only** list; each migration runs in its own transaction at launch for every version above the stored one. The multi-provider redesign and the subscription-capacity tables were folded into the single initial migration in place, because the application was still in development and had no data to preserve (a database from an earlier build must be deleted). From the first release on, a schema change is a new appended migration. Built-in prices are reinstalled automatically when the catalog's fingerprint changes, leaving user-defined rows alone.
 
 ## Retention and deletion
 
 * `purge(olderThan:)` removes old requests, then orphaned sessions and projects, old quota snapshots and old alert records. It runs daily when a retention period is set.
 * The importer applies the same cutoff to everything it reads, so purged history does not return when a log file is scanned again.
-* "Delete all collected data" empties every table (price cards excepted, since they are not user data) and `VACUUM`s. The original Claude Code files are never touched.
+* "Delete all collected data" empties every observation table, capacity measurements and plan assignments, then `VACUUM`s. Price cards and plan price overrides remain because they are configuration, not user data. The original Claude Code and Codex files are never touched.

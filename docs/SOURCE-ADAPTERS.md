@@ -30,7 +30,7 @@ A parser must be tolerant: a malformed line increments `batch.malformedLineCount
 
 Nothing in the shared core names a provider, so adding one touches only data and one adapter:
 
-1. **Describe it as data.** Supply a `ProviderRegistry` value (or extend `BuiltinProviders.swift`) with the provider, its products, any new surfaces, its quota pools (with the products that share each, and the standard window lengths), and its telemetry sources with their capabilities and *limitations stated plainly*. A product that leaves no local record is declared `isObservable: false`, and it will be listed as such and never given a figure.
+1. **Describe it as data.** Supply a `ProviderRegistry` value (or extend `BuiltinProviders.swift`) with the provider, its products, any new surfaces, its quota pools (with the products that share each, and the standard window lengths), its telemetry sources with their capabilities and *limitations stated plainly*, and optionally its subscription plans (`SubscriptionPlanDefinition`: key, display name, monthly reference price with currency and as-of date, advertised five-hour multipliers where documented, and a note). A product that leaves no local record is declared `isObservable: false`, and it will be listed as such and never given a figure. Do not add a plan definition whose price or multiplier you cannot source.
 2. **Write an adapter.** Implement `SourceAdapter` and a `LineParser` that emits `RequestObservation` (with a `UsageMeasurement` normalized by *your* conversion, with unknown categories left nil), `SessionObservation` (with an `AccountRef` built by `AccountRef.identified`, which hashes the identifier), and, if the source reports allowance snapshots, `QuotaObservation` (pool key, window key from `WindowNaming.key(minutes:)`). Choose a request key every source describing that request agrees on.
 3. **Register it** where the app is composed (`AppModel`, `tw`).
 4. **Prices** are data too: dated rate cards per provider and model (built in, or `PricingStore.upsertUserRate`), with an optional prompt-size tier and a service tier. A model without a card is reported as unpriced, and a card says whether its price was published, derived or entered by the user.
@@ -38,6 +38,28 @@ Nothing in the shared core names a provider, so adding one touches only data and
 `Tests/UsageCoreTests/ArchitectureTests.swift` is the executable proof: `FutureProviderTests` defines an invented provider with a deliberately different token format, and runs it through the real collector, writer, analytics, pricing, export, quota and alert code using nothing but a registry value and an adapter. `ArchitectureIsolationTests` fails the build of the test suite if a provider name leaks out of the files designated for it.
 
 Quota that is not part of the session logs arrives through a `QuotaFeed` (see [QUOTA](QUOTA.md)).
+
+## What capacity analysis needs from a source
+
+Capacity analysis adds no adapter field and reads no new file. It consumes what adapters already
+produce:
+
+* **Authoritative quota snapshots** with a window length, cycle identity (reset time), observed time
+  and percentage. A percentage that the source did not report is never synthesized.
+* **Local request rows** with all token categories, model, time and enough coverage information to
+  price them. A partial record, an unpriced model or a missing required category makes the interval
+  ineligible instead of contributing a guess.
+* **An account reference.** `AccountRef.identified` is used only when the source itself carries an
+  identifier. If it does not, `AccountRef.unassigned` is the honest value. A source's plan name is
+  metadata, not an account identity, and is never used to split an unassigned account.
+* **Optional plan metadata.** A source that reports a plan type may create a plan period with
+  `providerReported` provenance. Claude's status line reports quotas but no verified account or plan
+  identity, so its plan periods are manual and explicitly labelled as such.
+
+The five-hour and weekly windows remain separate inputs. The analyzer never infers one from the
+other, and it never derives a quota percentage from tokens. Providers with no registered plans still
+get plan history and measurements, but no capacity comparison; the core contains no provider
+conditions. See [CAPACITY.md](CAPACITY.md#2-stored-data).
 
 ## The Claude Code adapter
 

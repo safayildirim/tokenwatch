@@ -220,9 +220,9 @@ public final class UsageDatabase: @unchecked Sendable {
     /// Deletes everything the app has stored, except the schema.
     public func eraseAllData() throws {
         try write { c in
-            for table in ["model_request", "session_reported_model_cost", "agent", "session",
-                          "project", "model", "source_file", "ingest_issue", "quota_snapshot", "quota_cycle",
-                          "quota_window", "quota_pool", "alert_fired"] {
+            for table in ["capacity_measurement", "plan_assignment", "model_request", "session_reported_model_cost",
+                          "agent", "session", "project", "model", "source_file", "ingest_issue", "quota_snapshot",
+                          "quota_cycle", "quota_window", "quota_pool", "alert_fired"] {
                 try c.run("DELETE FROM \(table)")
             }
             try c.run("DELETE FROM account WHERE hash != ''")

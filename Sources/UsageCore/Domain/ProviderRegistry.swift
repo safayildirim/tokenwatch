@@ -83,6 +83,48 @@ public struct TelemetrySourceDefinition: Sendable, Equatable {
     public var limitations: String
 }
 
+/// A subscription plan that a provider sells.
+///
+/// Plan definitions are registry data, never conditions in shared services. A provider that has no
+/// subscription plans simply supplies none; its quota pools still work as before.
+///
+/// `nominalMultipliers` are the provider's *advertised* capacity relative to that provider's
+/// baseline plan, keyed by window length in minutes. They are reference values for charts and are
+/// never treated as measurements. A window with no entry is unknown; it is not inferred from
+/// another window. For example, a four-times larger five-hour allowance does not imply anything
+/// about the weekly allowance.
+public struct SubscriptionPlanDefinition: Sendable, Equatable, Identifiable {
+    public var key: String
+    public var provider: ProviderID
+    public var name: String
+    /// The provider's published monthly list price in micro-USD, kept as a reference value.
+    public var monthlyPriceMicros: Int64
+    public var currency: String
+    /// When the reference price was read, as an ISO 8601 date.
+    public var priceAsOf: String?
+    public var nominalMultipliers: [Int: Double]
+    public var note: String
+
+    public var id: String { provider.rawValue + "/" + key }
+
+    public init(key: String, provider: ProviderID, name: String, monthlyPriceMicros: Int64, currency: String = "USD",
+                priceAsOf: String? = nil, nominalMultipliers: [Int: Double] = [:], note: String = "") {
+        self.key = key
+        self.provider = provider
+        self.name = name
+        self.monthlyPriceMicros = monthlyPriceMicros
+        self.currency = currency
+        self.priceAsOf = priceAsOf
+        self.nominalMultipliers = nominalMultipliers
+        self.note = note
+    }
+
+    public func nominalMultiplier(minutes: Int?) -> Double? {
+        guard let minutes else { return nil }
+        return nominalMultipliers[minutes]
+    }
+}
+
 /// All providers, products, surfaces, quota pools and telemetry sources known to the application.
 ///
 /// The built-in registry covers Anthropic and OpenAI. A provider is added by supplying another registry
@@ -94,14 +136,17 @@ public struct ProviderRegistry: Sendable {
     public var surfaces: [SurfaceDefinition]
     public var pools: [QuotaPoolDefinition]
     public var sources: [TelemetrySourceDefinition]
+    public var plans: [SubscriptionPlanDefinition]
 
     public init(providers: [ProviderDefinition] = [], products: [ProductDefinition] = [], surfaces: [SurfaceDefinition] = [],
-                pools: [QuotaPoolDefinition] = [], sources: [TelemetrySourceDefinition] = []) {
+                pools: [QuotaPoolDefinition] = [], sources: [TelemetrySourceDefinition] = [],
+                plans: [SubscriptionPlanDefinition] = []) {
         self.providers = providers
         self.products = products
         self.surfaces = surfaces
         self.pools = pools
         self.sources = sources
+        self.plans = plans
     }
 
     /// Returns this registry extended with the definitions of another one.
@@ -115,10 +160,15 @@ public struct ProviderRegistry: Sendable {
             products: merged(products, other.products) { $0.id },
             surfaces: merged(surfaces, other.surfaces) { $0.id },
             pools: merged(pools, other.pools) { "\($0.provider.rawValue)/\($0.key)" },
-            sources: merged(sources, other.sources) { $0.id })
+            sources: merged(sources, other.sources) { $0.id },
+            plans: merged(plans, other.plans) { $0.id })
     }
 
     public func provider(_ id: ProviderID) -> ProviderDefinition? { providers.first { $0.id == id } }
+    public func plan(provider: ProviderID, key: String) -> SubscriptionPlanDefinition? {
+        plans.first { $0.provider == provider && $0.key == key }
+    }
+    public func plans(of provider: ProviderID) -> [SubscriptionPlanDefinition] { plans.filter { $0.provider == provider } }
     public func product(_ id: ProductID) -> ProductDefinition? { products.first { $0.id == id } }
     public func surface(_ id: SurfaceID) -> SurfaceDefinition? { surfaces.first { $0.id == id } }
     public func source(_ id: TelemetrySourceID) -> TelemetrySourceDefinition? { sources.first { $0.id == id } }

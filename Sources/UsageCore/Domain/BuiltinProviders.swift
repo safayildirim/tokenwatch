@@ -100,5 +100,25 @@ public extension ProviderRegistry {
                 name: "Codex session files",
                 capabilities: [.sessions, .requestTokens, .cacheTokens, .reasoningTokens, .models, .quotaUtilization, .quotaResetTimes, .accountIdentity],
                 limitations: "Quota figures are snapshots written when a request completes, so they go stale between requests. ChatGPT Chat is not covered."),
+        ],
+        plans: [
+            // Reference prices read 2026-10-22. They are editable in the app and are never used to
+            // infer capacity. Only the five-hour nominal multipliers are advertised; the weekly
+            // multipliers are deliberately absent, because the provider does not state them.
+            SubscriptionPlanDefinition(
+                key: "claude-pro", provider: .anthropic, name: "Claude Pro",
+                monthlyPriceMicros: 20_000_000, priceAsOf: "2026-10-22",
+                nominalMultipliers: [300: 1],
+                note: "Reference price; verify it before relying on a cost comparison. Nominal five-hour capacity is the baseline for the Max plans."),
+            SubscriptionPlanDefinition(
+                key: "claude-max-5x", provider: .anthropic, name: "Claude Max 5x",
+                monthlyPriceMicros: 100_000_000, priceAsOf: "2026-10-22",
+                nominalMultipliers: [300: 5],
+                note: "Reference price. The provider advertises a five-hour allowance five times Pro's, but says nothing about the weekly allowance."),
+            SubscriptionPlanDefinition(
+                key: "claude-max-20x", provider: .anthropic, name: "Claude Max 20x",
+                monthlyPriceMicros: 200_000_000, priceAsOf: "2026-10-22",
+                nominalMultipliers: [300: 20],
+                note: "Reference price. The advertised five-hour multiplier is four times Max 5x's; this is not evidence about weekly capacity."),
         ])
 }

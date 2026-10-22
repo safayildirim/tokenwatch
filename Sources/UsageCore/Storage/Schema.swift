@@ -302,5 +302,77 @@ enum Schema {
         message   TEXT NOT NULL
     ) STRICT;
     CREATE INDEX idx_issue_time ON ingest_issue(at);
+
+    -- Subscription-capacity metadata that is not derived from transcript logs.
+    --
+    -- Raw telemetry stays where it is. These tables describe what a person says about their own
+    -- subscriptions, and which explicitly labelled measurement intervals they ran. Keeping the
+    -- manual annotations separate from provider observations is what allows "observed" and
+    -- "estimated" to remain distinguishable, and lets a rebuild of transcript-derived tables leave
+    -- the annotations and quota history intact.
+    --
+    -- A plan assignment covers the half-open interval [effective_from, effective_to). Overlaps for
+    -- one account are rejected by PlanHistoryStore; the unique index makes an exact-start duplicate
+    -- impossible even if two writers race. SQLite has no built-in range-exclusion constraint, so the
+    -- remaining overlap rule is enforced transactionally in Swift.
+    --
+    -- A plan key of NULL means "unknown or unspecified". It is a fact, not a guess, and no capacity
+    -- comparison is ever produced for it.
+    CREATE TABLE plan_assignment (
+        id             INTEGER PRIMARY KEY,
+        provider_id    TEXT NOT NULL REFERENCES provider(id),
+        account_id     INTEGER NOT NULL REFERENCES account(id),
+        plan_key       TEXT,
+        account_label  TEXT,
+        effective_from INTEGER NOT NULL,
+        effective_to   INTEGER,
+        provenance     TEXT NOT NULL DEFAULT 'manual',
+        note           TEXT NOT NULL DEFAULT '',
+        created_at     INTEGER NOT NULL,
+        updated_at     INTEGER NOT NULL,
+        CHECK (effective_to IS NULL OR effective_to > effective_from)
+    ) STRICT;
+    CREATE INDEX idx_plan_assignment_account_time
+        ON plan_assignment(account_id, effective_from, effective_to);
+    CREATE UNIQUE INDEX idx_plan_assignment_start
+        ON plan_assignment(provider_id, account_id, effective_from);
+
+    CREATE TABLE plan_price (
+        provider_id         TEXT NOT NULL REFERENCES provider(id),
+        plan_key            TEXT NOT NULL,
+        monthly_price_micros INTEGER NOT NULL,
+        currency            TEXT NOT NULL DEFAULT 'USD',
+        effective_from      INTEGER NOT NULL,
+        origin              TEXT NOT NULL DEFAULT 'user',
+        note                TEXT,
+        PRIMARY KEY (provider_id, plan_key, effective_from)
+    ) STRICT;
+
+    CREATE TABLE capacity_measurement (
+        id                  INTEGER PRIMARY KEY,
+        provider_id         TEXT NOT NULL REFERENCES provider(id),
+        account_id          INTEGER NOT NULL REFERENCES account(id),
+        pool_key            TEXT NOT NULL,
+        window_key          TEXT NOT NULL,
+        window_minutes      INTEGER,
+        plan_assignment_id  INTEGER REFERENCES plan_assignment(id) ON DELETE SET NULL,
+        plan_key            TEXT,
+        account_label       TEXT,
+        label               TEXT NOT NULL,
+        note                TEXT NOT NULL DEFAULT '',
+        started_at          INTEGER NOT NULL,
+        ended_at            INTEGER,
+        state               TEXT NOT NULL DEFAULT 'open',
+        created_at          INTEGER NOT NULL,
+        updated_at          INTEGER NOT NULL,
+        CHECK (ended_at IS NULL OR ended_at > started_at)
+    ) STRICT;
+    CREATE INDEX idx_capacity_measurement_window_time
+        ON capacity_measurement(account_id, pool_key, window_key, started_at);
+    CREATE UNIQUE INDEX idx_capacity_measurement_open
+        ON capacity_measurement(account_id, pool_key, window_key)
+        WHERE ended_at IS NULL;
+
+    CREATE INDEX idx_snapshot_observed ON quota_snapshot(observed_at);
     """
 }

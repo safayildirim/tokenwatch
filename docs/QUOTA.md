@@ -77,7 +77,7 @@ Settings in a project's `.claude/settings.json` or `settings.local.json` overrid
 * **Terminal sessions only.** The status line renders in the Claude Code CLI. The VS Code extension and Claude Desktop's Code tab do not run it, so quota is reported only while a terminal Claude Code session is in use. Between such sessions the figure is marked stale. Token usage from VS Code and Desktop is still fully collected.
 * **Subscribers only.** API-key users have no `rate_limits`, so quota is permanently "Unavailable" for them. That is the truthful answer.
 * **No history before installation.** Nothing reports past utilization, so quota history begins when the helper is installed.
-* **One account assumed.** Claude Code's status line input names no account, so every Claude reading belongs to one pool. After `/login` to another account the new account's readings arrive with different reset times and form their own cycles (reset times more than 30 seconds apart never merge), but the two accounts cannot be told apart.
+* **One account assumed.** Claude Code's status line input names no account, so every Claude reading belongs to one explicit *unassigned* account. After `/login` to another account the new account's readings arrive with different reset times and form their own cycles (reset times more than 30 seconds apart never merge), but the two accounts cannot be told apart. The app never infers identity from reset times, session ids, or which sessions were nearby. Capacity comparisons therefore require non-overlapping manual plan periods; conflicting account labels make the comparison unsupported. See [CAPACITY.md](CAPACITY.md#3-account-identity).
 * **Per-session quota attribution is impossible.** The session pages show three separate quantities and never merge them: (1) the session's actual tokens, (2) its share of locally observed activity in each quota window, and (3) the account-level percentage Claude reported, with its peak in that window. Quota consumed on surfaces the app cannot observe is never attributed to local sessions.
 
 ## The undocumented Desktop cache
@@ -145,3 +145,27 @@ Sources reach the store in two ways: a **quota feed** (`QuotaFeed`) that the coo
 Alerts are identified by **account, pool, window and cycle**, and use the same windows: a threshold is announced once per cycle, and a reset is announced once. Thresholds are configured for windows of a day or less and for longer ones.
 
 The menu bar offers *highest utilization*, which compares the displayable windows of all pools and shows the largest. Percentages of different pools are never added.
+
+## From quota history to capacity
+
+Quota history says what the provider reported. Capacity analysis compares **how much quota
+percentage different plans spent on the same normalized local work**. It is a separate, on-demand
+read path over the same snapshots; it does not change what the menu bar, alerts, or quota pages show.
+
+* Only **authoritative** snapshots become capacity intervals. The unverified Desktop cache never
+  does.
+* The five-hour (`300m`) and weekly (`10080m`) windows are analyzed independently. A cycle is never
+  merged across a reset, and a lower reading inside one cycle is skipped, never treated as a new
+  cycle.
+* Local work is normalized by API-equivalent list cost, not by tokens and not by the provider's
+  undocumented metering. The provider percentage remains the only quota quantity.
+* A plan period is a half-open manual (or provider-reported) annotation. All Claude readings remain
+  in the unassigned account; the app never claims a verified account identity from timing.
+* A ratio is published only when at least two independent cycles per plan and two matched pairs are
+  available, or a comparable pooled fallback exists. Otherwise the result is **unknown**, not a
+  number derived from advertised multipliers.
+* The advertised five-hour multipliers (Pro 1×, Max 5x 5×, Max 20x 20×) are shown as references
+  only. Weekly multipliers are not advertised and are not invented.
+
+The method, evidence levels, matching rules, purchasing arithmetic and limitations are in
+[CAPACITY.md](CAPACITY.md).

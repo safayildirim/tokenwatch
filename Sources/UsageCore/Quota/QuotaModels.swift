@@ -88,6 +88,45 @@ public struct QuotaFreshnessPolicy: Sendable, Equatable {
     public func freshness(age: TimeInterval) -> QuotaFreshness {
         age <= freshWithin ? .fresh : (age <= agingWithin ? .aging : .stale)
     }
+
+    /// The local cache is a snapshot that Claude Code refreshes only when it fetches usage. It is still a provider
+    /// observation, but a ten-minute boundary would mark almost every normal cache reading stale. One hour is a
+    /// deliberately generous "recent" boundary for this kind of snapshot; two hours separates "aging" from clearly
+    /// stale. These are presentation boundaries, not claims about how often Claude Code writes the file.
+    public func thresholds(for source: TelemetrySourceID) -> (fresh: TimeInterval, aging: TimeInterval) {
+        QuotaSourcePolicy.thresholds(for: source, defaults: (freshWithin, agingWithin))
+    }
+
+    public func freshness(age: TimeInterval, source: TelemetrySourceID) -> QuotaFreshness {
+        let t = thresholds(for: source)
+        return age <= t.fresh ? .fresh : (age <= t.aging ? .aging : .stale)
+    }
+}
+
+/// Two sources reported different values for the same reset cycle and approximately the same moment.
+///
+/// The values are deliberately not averaged. The selected observation is identified, and every alternative remains
+/// visible so that the interface can explain the choice and a person can judge the source.
+public struct QuotaReadingAlternative: Sendable, Equatable {
+    public var utilizationPercent: Double
+    public var observedAt: Date
+    public var source: TelemetrySourceID
+
+    public init(utilizationPercent: Double, observedAt: Date, source: TelemetrySourceID) {
+        self.utilizationPercent = utilizationPercent
+        self.observedAt = observedAt
+        self.source = source
+    }
+}
+
+public struct QuotaSourceConflict: Sendable, Equatable {
+    public var selected: QuotaReadingAlternative
+    public var alternatives: [QuotaReadingAlternative]
+
+    public init(selected: QuotaReadingAlternative, alternatives: [QuotaReadingAlternative]) {
+        self.selected = selected
+        self.alternatives = alternatives
+    }
 }
 
 public enum QuotaAvailability: Sendable, Equatable {
@@ -115,9 +154,13 @@ public struct QuotaWindowState: Sendable, Identifiable, Equatable {
     public var availability: QuotaAvailability
     public var freshness: QuotaFreshness?
     public var evaluatedAt: Date
+    /// Present only when another source reported a different value for the same cycle within a short window. The
+    /// selected reading is still the one in `reading`; this is an explanation, not a second percentage.
+    public var sourceConflict: QuotaSourceConflict?
 
     public init(pool: QuotaPoolInfo, windowKey: String, windowMinutes: Int?, reading: QuotaReading?,
-                availability: QuotaAvailability, freshness: QuotaFreshness?, evaluatedAt: Date) {
+                availability: QuotaAvailability, freshness: QuotaFreshness?, evaluatedAt: Date,
+                sourceConflict: QuotaSourceConflict? = nil) {
         self.pool = pool
         self.windowKey = windowKey
         self.windowMinutes = windowMinutes
@@ -125,6 +168,7 @@ public struct QuotaWindowState: Sendable, Identifiable, Equatable {
         self.availability = availability
         self.freshness = freshness
         self.evaluatedAt = evaluatedAt
+        self.sourceConflict = sourceConflict
     }
 
     /// A long form such as "Weekly window", for headings.
@@ -197,9 +241,10 @@ public enum QuotaEvaluator {
     /// replace a newer one: the reading that was confirmed most recently wins.
     public static func evaluate(pool: QuotaPoolInfo, windowKey: String, windowMinutes: Int?, readings: [QuotaReading], now: Date,
                                 allowUnverified: Bool, policy: QuotaFreshnessPolicy = QuotaFreshnessPolicy()) -> QuotaWindowState {
-        func state(_ reading: QuotaReading?, _ availability: QuotaAvailability, _ freshness: QuotaFreshness?) -> QuotaWindowState {
+        func state(_ reading: QuotaReading?, _ availability: QuotaAvailability, _ freshness: QuotaFreshness?,
+                   conflict: QuotaSourceConflict? = nil) -> QuotaWindowState {
             QuotaWindowState(pool: pool, windowKey: windowKey, windowMinutes: windowMinutes, reading: reading,
-                             availability: availability, freshness: freshness, evaluatedAt: now)
+                             availability: availability, freshness: freshness, evaluatedAt: now, sourceConflict: conflict)
         }
         let candidates = readings.filter { allowUnverified || $0.authority == .authoritative }
         // Authoritative readings always outrank unverified ones.
@@ -209,14 +254,21 @@ public enum QuotaEvaluator {
         // A reading whose window is still open beats any whose window has closed, because a newer
         // window's report must not be hidden behind an older one that happens to be more recent.
         let open = eligible.filter { ($0.resetsAt ?? .distantFuture) > now }
+        // The latest provider observation wins. When two sources carry exactly the same timestamp, the documented
+        // status-line source is preferred over the local cache, and the cache over the undocumented Desktop hint. The
+        // percentage is considered only after those, so no source can win merely by reporting a larger number.
         var chosen = (open.isEmpty ? eligible : open).max {
-            ($0.observedAt, $0.utilizationPercent) < ($1.observedAt, $1.utilizationPercent)
+            (observationRank($0, now: now), QuotaSourcePolicy.priority(for: $0.source), $0.utilizationPercent)
+                < (observationRank($1, now: now), QuotaSourcePolicy.priority(for: $1.source), $1.utilizationPercent)
         }!
-        // Within one cycle the utilization only grows. Two sessions that run at the same time can deliver their
-        // readings out of order, so a lower value that arrives a few seconds later belongs to a response that
-        // started earlier. The highest value of the cycle is the one that reflects the account's state.
+        // Within one cycle the utilization only grows. Two sessions of the same source can deliver their readings out
+        // of order, so a lower value that arrives a few seconds later belongs to a response that started earlier. The
+        // rule is deliberately limited to the selected source: two sources that disagree are not reconciled by taking
+        // the larger percentage.
         if let cycle = chosen.cycleID {
-            let sameCycle = eligible.filter { $0.cycleID == cycle && $0.authority == chosen.authority }
+            let sameCycle = eligible.filter {
+                $0.cycleID == cycle && $0.authority == chosen.authority && $0.source == chosen.source
+            }
             if let highest = sameCycle.max(by: { ($0.utilizationPercent, $0.observedAt) < ($1.utilizationPercent, $1.observedAt) }),
                highest.utilizationPercent > chosen.utilizationPercent {
                 chosen = highest
@@ -225,10 +277,40 @@ public enum QuotaEvaluator {
         // A reading that is dated later than the current time means that the clock was moved back since it was taken. How
         // old it really is cannot be known, so it is treated as stale instead of as brand new.
         let age = now.timeIntervalSince(chosen.observedAt)
-        let freshness = age < -QuotaStaleness.futureSkew ? QuotaFreshness.stale : policy.freshness(age: max(0, age))
+        let freshness = age < -QuotaStaleness.futureSkew ? QuotaFreshness.stale
+            : policy.freshness(age: max(0, age), source: chosen.source)
+        let conflict = sourceConflict(chosen: chosen, eligible: eligible)
         if let reset = chosen.resetsAt, reset <= now {
-            return state(chosen, .windowElapsed(resetAt: reset), freshness)
+            return state(chosen, .windowElapsed(resetAt: reset), freshness, conflict: conflict)
         }
-        return state(chosen, .available, freshness)
+        return state(chosen, .available, freshness, conflict: conflict)
+    }
+
+    private static func observationRank(_ r: QuotaReading, now: Date) -> Date {
+        // A reading dated far in the future is a clock problem. It was already rejected by the feeds, but a stored
+        // reading can still have been recorded before the clock moved; treat it as old rather than as the newest.
+        r.observedAt.timeIntervalSince(now) > QuotaStaleness.futureSkew ? .distantPast : r.observedAt
+    }
+
+    /// A disagreement is only interesting when two sources describe the same cycle at about the same time. A cache
+    /// fetched twenty minutes before the status line normally holds an older percentage; that is elapsed usage, not a
+    /// conflict. The values are compared, never averaged.
+    private static func sourceConflict(chosen: QuotaReading, eligible: [QuotaReading]) -> QuotaSourceConflict? {
+        guard let cycle = chosen.cycleID else { return nil }
+        let selected = QuotaReadingAlternative(utilizationPercent: chosen.utilizationPercent,
+                                               observedAt: chosen.observedAt, source: chosen.source)
+        var alternatives: [QuotaReadingAlternative] = []
+        for r in eligible where r.source != chosen.source && r.cycleID == cycle {
+            guard abs(r.observedAt.timeIntervalSince(chosen.observedAt)) <= 15 * 60,
+                  abs(r.utilizationPercent - chosen.utilizationPercent) >= 1 else { continue }
+            let candidate = QuotaReadingAlternative(utilizationPercent: r.utilizationPercent,
+                                                    observedAt: r.observedAt, source: r.source)
+            if !alternatives.contains(where: { $0.source == candidate.source && $0.utilizationPercent == candidate.utilizationPercent }) {
+                alternatives.append(candidate)
+            }
+        }
+        guard !alternatives.isEmpty else { return nil }
+        alternatives.sort { ($0.source.rawValue, $0.utilizationPercent) < ($1.source.rawValue, $1.utilizationPercent) }
+        return QuotaSourceConflict(selected: selected, alternatives: alternatives)
     }
 }

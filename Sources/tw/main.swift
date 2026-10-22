@@ -228,7 +228,7 @@ do {
             }
         }
         for feed in await coordinator.feedStatus() {
-            print("feed \(feed.id.rawValue): folder exists=\(feed.rootsExist) observations=\(feed.observationCount) sources=\(feed.originCount)")
+            print("feed \(feed.id.rawValue): source exists=\(feed.sourceExists) path=\(feed.sourcePath ?? "-") folder exists=\(feed.rootsExist) observations=\(feed.observationCount) sources=\(feed.originCount)")
         }
         print("status line helper installed in Claude Code settings: \(StatusLineInstaller.inspect().isInstalled)")
 

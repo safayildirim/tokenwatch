@@ -181,6 +181,75 @@ struct JSONCursor {
         return nil
     }
 
+    /// Reads an integer without accepting a fraction or an exponent. Quota timestamps and percentages use
+    /// this so that `1.5` is not silently truncated into a different number.
+    mutating func readExactInt() -> Int64? {
+        skipWhitespace()
+        let start = i
+        var negative = false
+        if peek == 0x2D { negative = true; i += 1 }
+        guard i < end, base[i] >= 0x30, base[i] <= 0x39 else { i = start; return nil }
+        if base[i] == 0x30 {
+            i += 1
+            if i < end, base[i] >= 0x30, base[i] <= 0x39 { i = start; return nil }
+        } else {
+            while i < end, base[i] >= 0x30, base[i] <= 0x39 { i += 1 }
+        }
+        if i < end, base[i] == 0x2E || base[i] == 0x65 || base[i] == 0x45 { i = start; return nil }
+        var value: Int64 = 0
+        var k = start + (negative ? 1 : 0)
+        while k < i {
+            let (m, o1) = value.multipliedReportingOverflow(by: 10)
+            let (a, o2) = m.addingReportingOverflow(Int64(base[k] - 0x30))
+            if o1 || o2 { i = start; return nil }
+            value = a
+            k += 1
+        }
+        return negative ? -value : value
+    }
+
+    /// Reads one JSON number strictly as written. The permissive `readDouble` is fine for log lines, whose
+    /// shape is already checked by the surrounding parser, but a cache file must not turn `+1` or `1e999`
+    /// into a plausible quota value.
+    mutating func readExactDouble() -> Double? {
+        skipWhitespace()
+        let start = i
+        if peek == 0x2D { i += 1 }
+        guard i < end, base[i] >= 0x30, base[i] <= 0x39 else { i = start; return nil }
+        if base[i] == 0x30 {
+            i += 1
+            if i < end, base[i] >= 0x30, base[i] <= 0x39 { i = start; return nil }
+        } else {
+            while i < end, base[i] >= 0x30, base[i] <= 0x39 { i += 1 }
+        }
+        if i < end, base[i] == 0x2E {
+            i += 1
+            guard i < end, base[i] >= 0x30, base[i] <= 0x39 else { i = start; return nil }
+            while i < end, base[i] >= 0x30, base[i] <= 0x39 { i += 1 }
+        }
+        if i < end, base[i] == 0x65 || base[i] == 0x45 {
+            i += 1
+            if i < end, base[i] == 0x2B || base[i] == 0x2D { i += 1 }
+            guard i < end, base[i] >= 0x30, base[i] <= 0x39 else { i = start; return nil }
+            while i < end, base[i] >= 0x30, base[i] <= 0x39 { i += 1 }
+        }
+        let length = i - start
+        guard length > 0, length <= 64 else { i = start; return nil }
+        var tmp = [CChar](repeating: 0, count: length + 1)
+        for k in 0..<length { tmp[k] = CChar(bitPattern: base[start + k]) }
+        let value = strtod(tmp, nil)
+        guard value.isFinite else { i = start; return nil }
+        return value
+    }
+
+    /// Consumes a JSON `null` literal. A failed attempt leaves the cursor where it was.
+    mutating func readNull() -> Bool {
+        skipWhitespace()
+        guard i + 4 <= end, memcmp(base + i, "null", 4) == 0 else { return false }
+        i += 4
+        return true
+    }
+
     // MARK: Skipping
 
     /// Advances past one complete value of any type. Returns false if the value is malformed or
@@ -250,6 +319,26 @@ struct JSONCursor {
             skipWhitespace()
             if peek == 0x2C { i += 1; continue }
             if peek == 0x7D { i += 1; return true }
+            return false
+        }
+    }
+
+    /// Iterates the elements of the array at the cursor. `body` must consume the element, or return
+    /// `false` to have the cursor skip it. Returns false when the array is malformed.
+    mutating func forEachElement(_ body: (inout JSONCursor) -> Bool) -> Bool {
+        guard consume(0x5B) else { return false }
+        skipWhitespace()
+        if peek == 0x5D { i += 1; return true }
+        while true {
+            skipWhitespace()
+            let before = i
+            if !body(&self) {
+                i = before
+                guard skipValue() else { return false }
+            }
+            skipWhitespace()
+            if peek == 0x2C { i += 1; continue }
+            if peek == 0x5D { i += 1; return true }
             return false
         }
     }

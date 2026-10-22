@@ -234,7 +234,9 @@ public enum CapacityAnalyticsEngine {
             }
         }
 
-        return try windows.map { window in
+        // A model-scoped limit has only a share of the plan's allowance, so a plan-wide nominal multiplier does not
+        // apply to it. It remains visible in the quota views, but it must not produce a capacity ratio for the plan.
+        return try windows.filter { WindowNaming.scopedLabel(fallbackKey: $0.key) == nil }.map { window in
             let history = try QuotaHistoryAnalyzer.analyze(
                 db, provider: account.provider, accountID: account.accountID, poolKey: account.poolKey,
                 windowKey: window.key, from: range.lowerBound, to: range.upperBound, timeline: timeline, policy: policy)

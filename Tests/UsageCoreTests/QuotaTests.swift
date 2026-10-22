@@ -302,7 +302,7 @@ final class QuotaCoordinatorTests: XCTestCase {
         let desktop = env.root.appendingPathComponent("plan-usage-history.json")
         let settings = SettingsStore(db: env.db)
         settings.update { $0.showUnverifiedQuota = hint }
-        return (QuotaCoordinator(db: env.db, settings: settings, feeds: .claude(bridgeDirectory: dir, desktopCache: desktop), clock: clock), dir, desktop)
+        return (QuotaCoordinator(db: env.db, settings: settings, feeds: .claude(bridgeDirectory: dir, desktopCache: desktop, cache: env.root.appendingPathComponent("none-cache.json")), clock: clock), dir, desktop)
     }
 
     private func writeBridge(_ dir: URL, session: String = "s1", five: Double, observed: Date, resets: Date) throws {

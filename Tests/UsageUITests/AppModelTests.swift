@@ -19,7 +19,9 @@ final class AppModelTests: XCTestCase {
     func testMissingClaudeFolderIsReportedNotTreatedAsAnError() async throws {
         let env = try UIEnv()
         let model = AppModel(db: env.db, adapters: [ClaudeCodeAdapter(root: env.root.appendingPathComponent("nope"))],
-                             bridgeDirectory: env.quotaDir, registryDirectory: env.registryDir)
+                             bridgeDirectory: env.quotaDir, registryDirectory: env.registryDir,
+                             desktopCache: env.root.appendingPathComponent("none.json"),
+                             claudeCache: env.root.appendingPathComponent("none-cache.json"))
         await model.start()
         await env.waitUntil { model.collectorSnapshot.sources.first?.state == .notFound || { model.requestRefresh(); return false }() }
         XCTAssertEqual(model.collectorSnapshot.sources.first?.state, .notFound)
@@ -86,6 +88,30 @@ final class AppModelTests: XCTestCase {
         await env.waitUntil { env.model.quotaState("300m")?.utilizationPercent == 40 }
         env.model.updateSettings { $0.menuBarMode = .quota(.anthropic) }
         XCTAssertEqual(env.model.menuBarTitle.text, "40%", "a missing window is left out, never replaced by a made-up number")
+        await env.cleanup()
+    }
+
+    func testAScopedWeeklyWindowDoesNotTakeTheWeeklySlotInTheMenuBar() async throws {
+        let env = try UIEnv()
+        let cache = env.root.appendingPathComponent("none-cache.json")
+        let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(6 * 3600))
+        let json = """
+        {"cachedUsageUtilization":{"accountUuid":"A1B2C3D4-E5F6-4789-8ABC-DEF012345678",
+          "fetchedAtMs":\(Clock.nowMs()),
+          "utilization":{
+            "five_hour":{"utilization":10,"resets_at":null},
+            "seven_day":{"utilization":90,"resets_at":"\(reset)"},
+            "limits":[{"kind":"weekly_scoped","percent":0,"resets_at":"\(reset)",
+              "scope":{"model":{"id":null,"display_name":"Fable"}}}]}}}
+        """
+        try Data(json.utf8).write(to: cache)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cache.path)
+        await env.model.start()
+        await env.waitUntil { env.model.quotaState("10080m")?.utilizationPercent == 90 }
+        XCTAssertEqual(env.model.quotaState("300m")?.utilizationPercent, 10)
+        XCTAssertTrue(env.model.quotaStates.contains { WindowNaming.scopedLabel(fallbackKey: $0.windowKey) == "Fable" })
+        env.model.updateSettings { $0.menuBarMode = .quota(.anthropic) }
+        XCTAssertEqual(env.model.menuBarTitle.text, "10% · 90%", "the scoped weekly limit must not replace the shared weekly window")
         await env.cleanup()
     }
 

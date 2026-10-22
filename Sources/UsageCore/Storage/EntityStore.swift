@@ -195,7 +195,14 @@ enum QuotaStore {
                 observed_at = min(quota_snapshot.observed_at, excluded.observed_at),
                 last_confirmed_at = max(quota_snapshot.last_confirmed_at, excluded.last_confirmed_at),
                 resets_at = CASE WHEN excluded.last_confirmed_at >= quota_snapshot.last_confirmed_at
-                                 THEN COALESCE(excluded.resets_at, quota_snapshot.resets_at) ELSE quota_snapshot.resets_at END
+                                 THEN COALESCE(excluded.resets_at, quota_snapshot.resets_at) ELSE quota_snapshot.resets_at END,
+                -- The percentage is the same, but the provenance of the latest confirmation is not. Keeping the
+                -- most recent source makes the source label of a collapsed snapshot truthful instead of depending on
+                -- which feed happened to run first.
+                telemetry_source_id = CASE WHEN excluded.last_confirmed_at >= quota_snapshot.last_confirmed_at
+                                           THEN excluded.telemetry_source_id ELSE quota_snapshot.telemetry_source_id END,
+                origin_session_id = CASE WHEN excluded.last_confirmed_at >= quota_snapshot.last_confirmed_at
+                                         THEN excluded.origin_session_id ELSE quota_snapshot.origin_session_id END
             """, [.int(windowID), .int(cycleID), .real(o.utilizationPercent), .optional(resetsMs), .int(observedMs), .int(observedMs),
                   .text(o.source.rawValue), .optional(originSessionID), .text(o.authority.rawValue)])
     }

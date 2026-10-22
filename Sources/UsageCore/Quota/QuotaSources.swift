@@ -21,6 +21,25 @@ public enum QuotaPaths {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
     }
     public static var claudeSettings: URL { claudeHome.appendingPathComponent("settings.json") }
+    /// The directory that holds Claude Code's `.claude.json` state file. The documented `CLAUDE_CONFIG_DIR` variable
+    /// moves that file; a relative or tilde-prefixed value is ignored because Claude Code requires an absolute path.
+    /// The optional status-line settings path is separate and intentionally remains `~/.claude/settings.json`.
+    public static var claudeConfigDirectory: URL {
+        if let raw = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], raw.hasPrefix("/") {
+            return URL(fileURLWithPath: raw, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+    /// Claude Code's local state file, which contains the last usage snapshot inside `cachedUsageUtilization`.
+    ///
+    /// This is not the same file as Claude Desktop's plan-usage cache. A GUI app launched from Finder does not inherit
+    /// a shell-only `CLAUDE_CONFIG_DIR`; the diagnostics screen names the path that was actually used.
+    public static var claudeCodeCache: URL {
+        if let override = ProcessInfo.processInfo.environment["TOKENWATCH_CLAUDE_CACHE"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return claudeConfigDirectory.appendingPathComponent(".claude.json")
+    }
     public static var desktopPlanUsageCache: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
     }
@@ -67,6 +86,75 @@ public struct QuotaBridgeFile: Codable, Sendable, Equatable {
 enum QuotaStaleness {
     static let futureSkew: TimeInterval = 5 * 60
 }
+
+/// How a source's readings age and how much its observation is trusted when several sources report the same moment.
+///
+/// This is provider knowledge, so it lives with the provider's quota sources rather than in the shared evaluator.
+public enum QuotaSourcePolicy {
+    public static func thresholds(for source: TelemetrySourceID,
+                                  defaults: (fresh: TimeInterval, aging: TimeInterval)) -> (fresh: TimeInterval, aging: TimeInterval) {
+        if source == .claudeCodeCache { return (60 * 60, 2 * 60 * 60) }
+        return defaults
+    }
+
+    public static func priority(for source: TelemetrySourceID) -> Int {
+        switch source {
+        case .claudeStatusLine: 3
+        case .claudeCodeCache: 2
+        case .claudeDesktopCache: 1
+        default: 2
+        }
+    }
+}
+
+/// Which local Claude source is supplying the figure that the interface is currently showing.
+public enum ClaudeQuotaConnection: Sendable, Equatable {
+    case localCache(observedAt: Date, freshness: QuotaFreshness)
+    case statusLine(observedAt: Date, freshness: QuotaFreshness)
+    case stale(source: TelemetrySourceID, observedAt: Date)
+    case noData
+    case collectionError(QuotaFeedIssue)
+
+    /// Chooses the connection state from the already-evaluated Anthropic pools. It never infers a percentage: an
+    /// absent reading stays absent, and a source error is reported only when no reading is available.
+    public static func evaluate(pools: [QuotaPoolState], feeds: [QuotaFeedStatus]) -> ClaudeQuotaConnection {
+        let allReadings = pools.filter { $0.pool.key.provider == .anthropic }
+            .flatMap(\.windows)
+            .compactMap { window -> (QuotaWindowState, QuotaReading)? in
+                // Only the two documented-or-provider-written Claude sources describe this connection. The opt-in
+                // Desktop hint is unverified and must not be reported as if it were the local cache.
+                guard let reading = window.reading, reading.authority == .authoritative else { return nil }
+                guard reading.source == .claudeCodeCache || reading.source == .claudeStatusLine else { return nil }
+                return (window, reading)
+            }
+        // The shared five-hour and weekly windows describe the subscription as a whole. A model-scoped window can
+        // have a different age, so it must not decide which source the diagnostics screen names.
+        let sharedReadings = allReadings.filter {
+            $0.0.windowMinutes != nil && WindowNaming.scopedLabel(fallbackKey: $0.0.windowKey) == nil
+        }
+        let readings = sharedReadings.isEmpty ? allReadings : sharedReadings
+        if let newest = readings.max(by: {
+            ($0.1.observedAt, QuotaSourcePolicy.priority(for: $0.1.source))
+                < ($1.1.observedAt, QuotaSourcePolicy.priority(for: $1.1.source))
+        }) {
+            let (window, reading) = newest
+            if window.freshness == .stale {
+                return .stale(source: reading.source, observedAt: reading.observedAt)
+            }
+            switch reading.source {
+            case .claudeCodeCache: return .localCache(observedAt: reading.observedAt, freshness: window.freshness ?? .fresh)
+            case .claudeStatusLine: return .statusLine(observedAt: reading.observedAt, freshness: window.freshness ?? .fresh)
+            default: return .noData
+            }
+        }
+        if let cache = feeds.first(where: { $0.id == .claudeCodeCache }), let issue = cache.issue {
+            return .collectionError(issue)
+        }
+        return .noData
+    }
+
+}
+
 
 /// The quota pool that Claude Code's rate limits belong to.
 public enum ClaudeQuota {
@@ -168,9 +256,12 @@ public struct ClaudeDesktopCacheFeed: QuotaFeed {
 }
 
 public extension Array where Element == any QuotaFeed {
-    /// The feeds that Claude provides, in the places they normally live.
+    /// The feeds that Claude provides, in the places they normally live. The local cache is the primary source and
+    /// needs no setup; the status line is an optional complementary source.
     static func claude(bridgeDirectory: URL = QuotaPaths.bridgeDirectory,
-                       desktopCache: URL = QuotaPaths.desktopPlanUsageCache) -> [any QuotaFeed] {
-        [ClaudeStatusLineFeed(directory: bridgeDirectory), ClaudeDesktopCacheFeed(url: desktopCache)]
+                       desktopCache: URL = QuotaPaths.desktopPlanUsageCache,
+                       cache: URL = QuotaPaths.claudeCodeCache) -> [any QuotaFeed] {
+        [ClaudeCodeCacheFeed(url: cache), ClaudeStatusLineFeed(directory: bridgeDirectory),
+         ClaudeDesktopCacheFeed(url: desktopCache)]
     }
 }

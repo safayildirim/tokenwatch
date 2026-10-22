@@ -22,6 +22,7 @@ final class ArchitectureIsolationTests: XCTestCase {
         "Ingest/SourceVerifier.swift",
         "Ingest/SessionRegistryMonitor.swift",
         "Quota/QuotaSources.swift",
+        "Quota/ClaudeCodeCacheSource.swift",
         "Quota/StatusLineInstaller.swift",
     ]
 
@@ -67,6 +68,16 @@ final class ArchitectureIsolationTests: XCTestCase {
                      "Analytics/AnalyticsEngine.swift", "Quota/QuotaCoordinator.swift", "Alerts/AlertEngine.swift", "Export/ExportService.swift"] {
             let all = try code(file).map(\.text).joined(separator: "\n")
             for name in adapters { XCTAssertFalse(all.contains(name), "\(file) names \(name)") }
+        }
+    }
+
+    func testTheClaudeCacheReaderHasNoNetworkPath() throws {
+        // The cache is local, read-only provider state. This guards against a future "refresh" that quietly turns it
+        // into a network client. It complements the behavioral tests; it cannot prove the absence of every possible
+        // network API, so the code review also keeps the reader to Foundation file I/O and Darwin.
+        let all = try code("Quota/ClaudeCodeCacheSource.swift").map(\.text).joined(separator: "\n")
+        for api in ["URLSession", "NSURLConnection", "NWConnection", "CFStream", "getaddrinfo", "socket(", "connect(", "Process("] {
+            XCTAssertFalse(all.contains(api), "the local cache reader must not use \(api)")
         }
     }
 

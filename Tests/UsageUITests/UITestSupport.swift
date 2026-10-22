@@ -25,7 +25,8 @@ final class UIEnv {
         for d in [projects, quotaDir, registryDir] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         db = try UsageDatabase.open(at: root.appendingPathComponent("db/usage.sqlite"))
         model = AppModel(db: db, adapters: [ClaudeCodeAdapter(root: projects), CodexAdapter(home: codexHome)], bridgeDirectory: quotaDir,
-                         registryDirectory: registryDir, desktopCache: root.appendingPathComponent("none.json"))
+                         registryDirectory: registryDir, desktopCache: root.appendingPathComponent("none.json"),
+                         claudeCache: root.appendingPathComponent("none-cache.json"))
         model.uiVisibilityOverride = true
     }
 

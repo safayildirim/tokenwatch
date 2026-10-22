@@ -515,7 +515,8 @@ final class OpenAIQuotaTests: XCTestCase {
         let at = now ?? self.now
         return QuotaCoordinator(db: env.db, settings: SettingsStore(db: env.db),
                                 feeds: .claude(bridgeDirectory: env.root.appendingPathComponent("quota"),
-                                               desktopCache: env.root.appendingPathComponent("none.json")), clock: { at })
+                                               desktopCache: env.root.appendingPathComponent("none.json"),
+                                               cache: env.root.appendingPathComponent("none-cache.json")), clock: { at })
     }
 
     private func openAIPools(_ env: TestEnv, now: Date? = nil) async -> [QuotaPoolState] {

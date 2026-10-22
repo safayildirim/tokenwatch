@@ -27,8 +27,18 @@ extension AppModel {
         return first.map { DisplayText.localized($0.name) } ?? providerName(id)
     }
 
-    /// True when a pool has no figure yet because the user can still switch on the way to get one.
-    func needsSetup(_ pool: QuotaPoolInfo) -> Bool { pool.key.provider == .anthropic && !claudeHelperInstalled }
+    /// True when a pool has no figure yet because there is neither a local cache nor the optional status-line helper.
+    ///
+    /// The cache needs no setup: Claude Code writes it itself. Treating the status-line helper as the only possible
+    /// source is what made a working local cache look disconnected.
+    func needsSetup(_ pool: QuotaPoolInfo) -> Bool {
+        guard pool.key.provider == .anthropic else { return false }
+        if claudeHelperInstalled { return false }
+        switch claudeQuotaConnection {
+        case .noData, .collectionError: return true
+        case .localCache, .statusLine, .stale: return false
+        }
+    }
 
     /// The state of the data source of a provider's session files, for explaining an empty page.
     func collectionState(of provider: ProviderID) -> SourceHealth.State? {
@@ -190,6 +200,7 @@ struct QuotaMeter: View {
                         }
                     }
                     freshnessLine(r)
+                    if !compact, let conflict = state.sourceConflict { conflictLine(conflict) }
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -202,6 +213,20 @@ struct QuotaMeter: View {
                 if let onSetup { Button("Set up", action: onSetup).controlSize(.mini) }
             }
         }
+    }
+
+    @ViewBuilder private func conflictLine(_ conflict: QuotaSourceConflict) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            let alternatives = conflict.alternatives.prefix(2).map {
+                "\(model.sourceName($0.source)) \(Int($0.utilizationPercent.rounded()))%"
+            }.joined(separator: ", ")
+            Text("Another source reported \(alternatives). The newest observation is shown; percentages from different sources are never averaged.")
+                .fixedSize(horizontal: false, vertical: true)
+            let selected = conflict.selected
+            Text("Selected: \(model.sourceName(selected.source)), \(Fmt.relative(selected.observedAt)).")
+                .font(.caption2)
+        }
+        .foregroundStyle(Palette.warning)
     }
 
     private func freshnessLine(_ r: QuotaReading) -> some View {

@@ -542,6 +542,18 @@ final class CapacityQuotaAnalysisTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(pair.measuredRatio), 1.0, accuracy: 1e-9)
     }
 
+    func testModelScopedWindowsAreNotTreatedAsPlanWideCapacity() throws {
+        let f = try Fixture()
+        let scope = WindowNaming.scopedKey(minutes: 10080, identity: "id:claude-opus-4", label: "Opus")
+        try f.record(window: scope, percent: 25, at: f.day0, resets: f.day0 + 86_400_000)
+        let report = try CapacityAnalyticsEngine.report(
+            f.env.db, range: Clock.date(ms: f.day0 - 3_600_000)...Clock.date(ms: t0),
+            now: Clock.date(ms: t0))
+        let account = try XCTUnwrap(report.accounts.first)
+        XCTAssertEqual(account.windows.map(\.windowKey), ["300m"])
+        XCTAssertFalse(account.windows.contains { $0.windowKey == scope })
+    }
+
     func testPlanChangeInsideAnIntervalIsExcluded() throws {
         let f = try Fixture()
         let timeline = try PlanHistoryStore.timeline(f.env.db, provider: .anthropic, accountID: f.accountID)

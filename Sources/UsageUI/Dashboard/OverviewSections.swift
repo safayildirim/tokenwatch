@@ -128,10 +128,10 @@ struct OverviewLimits: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Limits are not connected").fontWeight(.semibold)
-                    Text("\(info.products.first.map(model.productName) ?? model.providerName(info.key.provider)) reports its limits only to its status line. Connecting adds a small helper there, so this page can show how much of each window is used.")
+                    Text("No Claude limits reported yet").fontWeight(.semibold)
+                    Text("Tokenwatch reads Claude Code's local usage cache automatically. The snapshot appears when Claude Code next fetches usage; the optional status line can also supply one.")
                         .foregroundStyle(.secondary).frame(maxWidth: 520, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                    Button("Connect Limits") { model.selection = .quota }.buttonStyle(.borderedProminent)
+                    Button("Open Limits") { model.selection = .quota }.buttonStyle(.borderedProminent)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
                 .overviewInset(padding: 14)

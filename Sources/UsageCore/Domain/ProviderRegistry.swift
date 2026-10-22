@@ -186,7 +186,29 @@ public enum WindowNaming {
     /// The stable key of a window of a known length, for example `300m`.
     public static func key(minutes: Int) -> String { "\(minutes)m" }
 
+    /// A window that is one of several limits of the same length, such as a weekly limit for one model.
+    ///
+    /// A duration alone cannot identify such a window: two weekly limits have the same length and different
+    /// allowances. The key carries both a stable identity and the provider's display label, so the display label
+    /// survives a database round trip without a new column. Neither part is a credential.
+    public static func scopedKey(minutes: Int, identity: String, label: String) -> String {
+        "scoped:\(minutes):\(base64URL(identity)):\(base64URL(label))"
+    }
+
+    /// The provider's label for a scoped window, or nil for an ordinary one.
+    public static func scopedLabel(fallbackKey: String) -> String? {
+        let parts = fallbackKey.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts[0] == "scoped", Int(parts[1]) != nil,
+              base64URLDecode(String(parts[2])) != nil,
+              let data = base64URLDecode(String(parts[3])),
+              let label = String(data: data, encoding: .utf8), !label.isEmpty else { return nil }
+        return label
+    }
+
     public static func displayName(minutes: Int?, fallbackKey: String) -> String {
+        if let label = scopedLabel(fallbackKey: fallbackKey) {
+            return String(localized: "\(label) weekly")
+        }
         guard let m = minutes else {
             return fallbackKey.replacingOccurrences(of: "_", with: " ").capitalized
         }
@@ -205,6 +227,9 @@ public enum WindowNaming {
 
     /// A compact label for the menu bar.
     public static func shortName(minutes: Int?, fallbackKey: String) -> String {
+        if let label = scopedLabel(fallbackKey: fallbackKey) {
+            return label.count <= 18 ? label : String(label.prefix(17)) + "…"
+        }
         guard let m = minutes else { return fallbackKey.replacingOccurrences(of: "_", with: " ").capitalized }
         switch m {
         case 10080: return String(localized: "Week")
@@ -219,4 +244,17 @@ public enum WindowNaming {
 
     /// Windows of a day or less are treated as short, because users react to them differently from weekly limits.
     public static func isShort(minutes: Int?) -> Bool { (minutes ?? Int.max) <= 1440 }
+
+    private static func base64URL(_ text: String) -> String {
+        Data(text.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func base64URLDecode(_ text: String) -> Data? {
+        var s = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while s.count % 4 != 0 { s.append("=") }
+        return Data(base64Encoded: s)
+    }
 }

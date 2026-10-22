@@ -27,8 +27,12 @@ public actor QuotaCoordinator {
     private var recorded: [String: QuotaObservation] = [:]
     private var subscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var watcher: FSEventsWatcher?
+    private var fileWatchers: [URL: FileEventWatcher] = [:]
+    private var fileWatcherTasks: [URL: Task<Void, Never>] = [:]
+    private var accountFingerprints: [TelemetrySourceID: String] = [:]
     private var tasks: [Task<Void, Never>] = []
     private var timerTask: Task<Void, Never>?
+    private var started = false
     private var lastRefresh: Date?
     private var lastRefreshAttempt = Date.distantPast
     private var trailingRefresh: Task<Void, Never>?
@@ -50,27 +54,39 @@ public actor QuotaCoordinator {
     // MARK: Lifecycle
 
     public func start() {
-        guard watcher == nil else { return }
+        guard !started else { return }
+        started = true
         let roots = feeds.flatMap(\.watchRoots)
         // The folders feeds write into are created for them, private to the user, so that watching can begin.
         for root in roots {
             try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         }
-        let w = FSEventsWatcher(roots: roots, latency: 0.3)
-        watcher = w
-        w.start()
-        tasks.append(Task { [weak self] in
-            for await _ in w.events { await self?.refresh() }
-        })
+        if !roots.isEmpty {
+            let w = FSEventsWatcher(roots: roots, latency: 0.3)
+            watcher = w
+            w.start()
+            tasks.append(Task { [weak self] in
+                for await _ in w.events { await self?.refresh() }
+            })
+        }
+        armFileWatchers()
         refresh(force: true)
     }
 
     public func stop() {
+        started = false
         for t in tasks { t.cancel() }
         tasks.removeAll()
         timerTask?.cancel()
+        timerTask = nil
+        trailingRefresh?.cancel()
+        trailingRefresh = nil
         watcher?.stop()
         watcher = nil
+        for w in fileWatchers.values { w.stop() }
+        fileWatchers.removeAll()
+        for t in fileWatcherTasks.values { t.cancel() }
+        fileWatcherTasks.removeAll()
         for c in subscribers.values { c.finish() }
         subscribers.removeAll()
     }
@@ -104,10 +120,42 @@ public actor QuotaCoordinator {
 
     /// How each feed is delivering, for the diagnostics view.
     public func feedStatus() -> [QuotaFeedStatus] {
-        feeds.map { feedStatuses[$0.id] ?? QuotaFeedStatus(id: $0.id, rootsExist: false, observationCount: 0, originCount: 0, newestObservation: nil, lastRead: nil) }
+        feeds.map {
+            feedStatuses[$0.id] ?? QuotaFeedStatus(id: $0.id, rootsExist: rootsExist(for: $0),
+                                                   observationCount: 0, originCount: 0, newestObservation: nil, lastRead: nil)
+        }
+    }
+
+    /// An empty watch-root list has no folder to report. Treating it as vacuously present hid the absence of a file
+    /// source (the Desktop plan cache) in diagnostics.
+    private func rootsExist(for feed: any QuotaFeed) -> Bool {
+        !feed.watchRoots.isEmpty && feed.watchRoots.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     // MARK: Refresh
+
+    /// Opens one descriptor per watched file. The cache lives in the home directory, so watching it through FSEvents
+    /// would subscribe the coordinator to every unrelated write in the home tree.
+    private func armFileWatchers() {
+        guard started else { return }
+        let files = Set(feeds.flatMap(\.watchFiles).map { $0.standardizedFileURL })
+        // Collect before mutating: Swift dictionaries must not be changed while they are being iterated.
+        let stale = fileWatchers.filter { !$0.value.isWatching }.map(\.key)
+        for file in stale {
+            fileWatchers[file]?.stop()
+            fileWatchers[file] = nil
+            fileWatcherTasks[file]?.cancel()
+            fileWatcherTasks[file] = nil
+        }
+        for file in files where fileWatchers[file] == nil {
+            guard FileManager.default.fileExists(atPath: file.path) else { continue }
+            let watcher = FileEventWatcher(url: file)
+            fileWatchers[file] = watcher
+            fileWatcherTasks[file] = Task { [weak self] in
+                for await _ in watcher.events { await self?.refresh() }
+            }
+        }
+    }
 
     /// Re-reads the quota files. Safe to call often: calls closer together than the minimum gap
     /// are ignored unless `force` is set.
@@ -134,17 +182,31 @@ public actor QuotaCoordinator {
         var fresh: [QuotaObservation] = []
         let enabledSources = settings.value
         for feed in feeds where !enabledSources.disabledSources.contains(feed.id.rawValue) && (!feed.requiresOptIn || enabledSources.showUnverifiedQuota) {
-            let observations = feed.observations(now: now)
-            fresh += observations
+            let output = feed.read(now: now)
+            var issue = output.issue
+            if let current = output.accountFingerprint {
+                if let previous = accountFingerprints[feed.id], previous != current {
+                    issue = .accountChanged
+                }
+                accountFingerprints[feed.id] = current
+            }
+            fresh += output.observations
+            let previous = feedStatuses[feed.id]
             feedStatuses[feed.id] = QuotaFeedStatus(
-                id: feed.id, rootsExist: feed.watchRoots.allSatisfy { FileManager.default.fileExists(atPath: $0.path) },
-                observationCount: observations.count, originCount: Set(observations.compactMap(\.originSession)).count,
-                newestObservation: observations.map(\.observedAt).max(), lastRead: now)
+                id: feed.id, rootsExist: rootsExist(for: feed),
+                observationCount: output.observations.count,
+                originCount: Set(output.observations.compactMap(\.originSession)).count,
+                newestObservation: output.observations.map(\.observedAt).max(), lastRead: now,
+                // A partial read still produced usable observations. Only a read with no observations leaves the last
+                // success where it was, so a malformed snapshot cannot make an earlier successful read disappear.
+                lastSuccess: !output.observations.isEmpty ? now : previous?.lastSuccess,
+                sourceExists: output.sourceExists, sourcePath: output.sourcePath?.path, issue: issue)
         }
         let changed = fresh != feedObservations
         feedObservations = fresh
         lastRefresh = now
         persistChanges(fresh)
+        armFileWatchers()
         if changed || force { notify() }
         scheduleNextWake(now: now)
     }
@@ -166,36 +228,46 @@ public actor QuotaCoordinator {
     /// identical values into one snapshot whose confirmation time moves forward, so the history stays small
     /// however often the status line renders. Unverified readings are never stored.
     private func persistChanges(_ observations: [QuotaObservation]) {
-        var toWrite: [QuotaObservation] = []
+        var toWrite: [(key: String, observation: QuotaObservation)] = []
         for o in observations where o.authority == .authoritative {
-            let key = "\(o.source.rawValue)|\(o.originSession ?? "-")|\(o.poolKey)|\(o.windowKey)"
+            let key = "\(o.provider.rawValue)|\(o.account.hash ?? "-")|\(o.source.rawValue)|\(o.originSession ?? "-")|\(o.poolKey)|\(o.windowKey)"
             if recorded[key] == o { continue }
-            recorded[key] = o
-            toWrite.append(o)
+            toWrite.append((key, o))
         }
         guard !toWrite.isEmpty else { return }
-        let batch = IngestWriter.coalesce(toWrite)
-        _ = try? db.write { c in
-            let resolver = EntityResolver(c, registry: db.registry)
-            for o in batch {
-                var originID: Int64?
-                if let product = o.originProduct, let session = o.originSession {
-                    originID = try? resolver.ensureSession(product: product, externalID: session, source: o.source)
+        let batch = IngestWriter.coalesce(toWrite.map(\.observation))
+        do {
+            try db.write { c in
+                let resolver = EntityResolver(c, registry: db.registry)
+                for o in batch {
+                    var originID: Int64?
+                    if let product = o.originProduct, let session = o.originSession {
+                        originID = try? resolver.ensureSession(product: product, externalID: session, source: o.source)
+                    }
+                    try QuotaStore.record(o, originSessionID: originID, resolver: resolver)
                 }
-                try QuotaStore.record(o, originSessionID: originID, resolver: resolver)
             }
+            // Do not claim an observation as recorded until the transaction committed. A transient database error must
+            // leave it eligible for the next refresh instead of losing it permanently.
+            for item in toWrite { recorded[item.key] = item.observation }
+        } catch {
+            // The feed status still carries the source error, and the next refresh will retry.
         }
     }
 
     /// Sleeps until the next time a window's state could change without any new data: a reset, or a
     /// reading passing from fresh to ageing to stale. The safety-net interval bounds the wait.
     private func scheduleNextWake(now: Date) {
+        // An explicit refresh can be used before start (tests and diagnostics do so). It must not create a wake task
+        // for a coordinator that is stopped.
+        guard started else { return }
         timerTask?.cancel()
         var next = now.addingTimeInterval(TimeInterval(settings.value.quotaRefreshSeconds))
         for state in states(now: now) {
             guard let r = state.reading else { continue }
             if let reset = r.resetsAt, reset > now { next = min(next, reset.addingTimeInterval(1)) }
-            for threshold in [freshnessPolicy.freshWithin, freshnessPolicy.agingWithin] {
+            let thresholds = freshnessPolicy.thresholds(for: r.source)
+            for threshold in [thresholds.fresh, thresholds.aging] {
                 let t = r.observedAt.addingTimeInterval(threshold + 1)
                 if t > now { next = min(next, t) }
             }

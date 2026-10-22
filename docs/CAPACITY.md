@@ -13,7 +13,7 @@ evidence does not support a ratio.
 
 | Quantity | Source | Status |
 |---|---|---|
-| Quota utilization percentage | The provider's status line or session telemetry | **Observed** |
+| Quota utilization percentage | The provider's local cache, status line or session telemetry | **Observed** |
 | Reset time / cycle identity | The provider's telemetry | **Observed** |
 | Local requests and token categories | Claude Code or Codex session files on this Mac | **Observed**, limited to this Mac |
 | API-equivalent list cost of local work | Built-in or user price cards | **Estimated** normalization proxy |
@@ -63,9 +63,10 @@ historical interpretation does not silently change.
 
 ## 3. Account identity
 
-The Claude Code status line has no verified account identity. The application therefore stores all
-Claude readings in the explicit **unassigned** Anthropic account, and never splits them by reset
-time, session id, or which session happened to be nearby.
+The Claude Code status line has no account identity, and the local cache identifier is used only to
+notice a change, not to split pools. The application therefore stores all Claude readings in the
+explicit **unassigned** Anthropic account, and never splits them by reset time, session id, account
+hash, or which session happened to be nearby.
 
 For a pool, the report distinguishes:
 
@@ -78,10 +79,13 @@ For a pool, the report distinguishes:
 | Overlapping plan periods | The timeline is ambiguous | **Not supported** until corrected |
 
 The comparison is always within one stored account row. Provider-identified accounts are never
-combined, even when their reset times look similar. Claude is different: because its status line
-carries no identity, readings from more than one physical subscription land in the same unassigned
-account. The app keeps cycles with different reset times apart, but that is not proof of identity,
-and it cannot measure two concurrently active Claude subscriptions as separate pools.
+combined, even when their reset times look similar. Model-scoped weekly limits are kept separate in
+the quota views but are not used for plan-wide capacity ratios: their allowance is only a share of
+the weekly limit, so a plan's all-model multiplier does not apply to them. Claude is different: its cache hash is only a
+change-detection value and its status line carries no identity, so readings from more than one
+physical subscription land in the same unassigned account. The app keeps cycles with different reset
+times apart, but that is not proof of identity, and it cannot measure two concurrently active Claude
+subscriptions as separate pools.
 
 ## 4. Building quota intervals
 
@@ -307,5 +311,6 @@ as still open; it is reviewed after it ends.
   strategy scales the measured single-subscription capacity by its count and is labelled as an
   assumption, not a second measurement.
 * It cannot separate two concurrently active Claude subscriptions, because the status line names no
-  account. Their readings share the unassigned Anthropic account; differing reset times keep cycles
-  apart but do not prove which subscription produced a reading.
+  account and the cache hash is not used for pool identity. Their readings share the unassigned
+  Anthropic account; differing reset times keep cycles apart but do not prove which subscription
+  produced a reading.

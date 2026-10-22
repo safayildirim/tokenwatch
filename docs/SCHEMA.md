@@ -25,7 +25,7 @@ The database is `~/Library/Application Support/Tokenwatch/usage.sqlite` (SQLite,
 | `session_reported_model_cost` | Per-model lines of a source's own cost summary | PK `(session_id, model_raw)` |
 | `source_file` | **Durable checkpoints** per file (inode, size, mtime, consumed offset in decompressed bytes for compressed files, head hash, counters, status) | `UNIQUE(source_id, path)` |
 | `quota_pool` | An allowance of one account | `UNIQUE(account_id, pool_key)` |
-| `quota_window` | A window of a pool, keyed by length | `UNIQUE(pool_id, window_key)` |
+| `quota_window` | A window of a pool, keyed by length or by a model-scoped identity and length | `UNIQUE(pool_id, window_key)` |
 | `quota_cycle` | One period between resets | |
 | `quota_snapshot` | A reported utilization in a cycle, with first-observed and last-confirmed times, source, originating session and authority | `UNIQUE(window_id, cycle_id, utilization_pct, authority)` |
 | `plan_assignment` | A half-open period `[effective_from, effective_to)` in which one account was on one subscription plan. `plan_key` may be `NULL` (unknown) and `effective_to` may be `NULL` (open) | FK to `account`; no overlapping periods per account (enforced transactionally); `UNIQUE(provider_id, account_id, effective_from)` |

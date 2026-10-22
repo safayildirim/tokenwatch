@@ -28,10 +28,10 @@ The smallest refactor that makes these first-class was a **redesign of the singl
 | Provider | The company or platform that delivers the models | Anthropic, OpenAI |
 | Product | A product of a provider that produces usage | Claude Code, Codex, ChatGPT Work, ChatGPT Chat (not observable) |
 | Surface | Where a session ran | terminal, VS Code, JetBrains, Codex Desktop, ChatGPT Desktop |
-| Telemetry source | The mechanism through which data is collected | Claude transcripts, the Claude status line, Codex session files |
+| Telemetry source | The mechanism through which data is collected | Claude transcripts, the Claude local usage cache, the optional Claude status line, Codex session files |
 | Account | An identity at a provider that owns an allowance | a hashed account, or the explicit "unassigned" |
 | Quota pool | An allowance enforced against an account, possibly shared by several products | Claude subscription; Codex and Work |
-| Quota window | One limit inside a pool, identified by length | `300m`, `10080m`, `1440m` |
+| Quota window | One limit inside a pool, identified by its length or, for a model-scoped limit, by its length plus scope | `300m`, `10080m`, `scoped:10080:…` |
 | Cycle | The period between two resets of a window | |
 | Quota snapshot | A reported utilization inside a cycle | 63 % at 14:02 |
 | Plan period | A half-open period in which one account was on one subscription plan, with manual or provider-reported provenance | Max 5x from 1 Aug to 14 Sep |
@@ -47,6 +47,7 @@ Findings come from inspecting this machine's real Claude installation (792 sessi
 |---|---|---|---|---|---|---|---|---|---|
 | **Claude Code transcripts** (`~/.claude/projects/**.jsonl`): terminal, VS Code extension, Claude Desktop "Code" tab | Yes | Yes (working directory, from the folder name and `cwd`) | Yes | **Yes**, on every assistant message | **Yes**, including the 5 m / 1 h split | Yes, per record | No | No | Only Claude Code's own per-session summary (`cost-state`), kept separate |
 | **Claude Code live process registry** (`~/.claude/sessions/*.json`) | Yes | Working directory | No | No | No | Start and update times | No | No | No |
+| **Claude Code local usage cache** (`~/.claude.json`, undocumented) | No | No | No | No | No | `cachedUsageUtilization.fetchedAtMs` | **Yes**: five-hour, weekly all-model and model-scoped windows | **Yes** | No |
 | **Claude Code status line input** (documented) | Yes | Yes | Yes | Context-window snapshot only, not per request | No | n/a | **Yes**: `rate_limits.five_hour` / `seven_day` / `spend_limit` `.used_percentage` | **Yes**: `.resets_at` | Session cost estimate |
 | **Claude Code OpenTelemetry** (documented) | Yes | Via attributes | Yes | Yes (`api_request` events) | Yes, in totals | Yes | **No** (not exposed) | No | `cost_usd` (an estimate) |
 | **Claude Desktop: Code sessions** (`~/Library/Application Support/Claude/claude-code-sessions`) | Yes (metadata) | Yes | Yes | No (the usage is in the transcripts above) | No | Yes | No | No | No |
@@ -58,11 +59,11 @@ Findings come from inspecting this machine's real Claude installation (792 sessi
 ### Conclusions drawn from the Claude audit
 
 1. **Token usage** is available completely and locally for everything that runs through Claude Code. The transcripts are the single richest source, and they are the only one that exposes the cache write lifetime split.
-2. **Subscription quota** has exactly one documented, authoritative source: the `rate_limits` object that Claude Code passes to a configured status line command. Nothing else documented reports subscription utilization. The application therefore ships a tiny status line helper (`tw-statusline`) as its authoritative quota source.
+2. **Subscription quota has one documented source and one provider-written local cache.** The documented source is the `rate_limits` object that Claude Code passes to a configured status line command; the application ships a tiny helper (`tw-statusline`) for it. Claude Code also keeps its last usage snapshot in `.claude.json`. That cache is undocumented and version-dependent, but it is read-only provider state, so it is the automatic baseline after strict validation. The two sources carry separate observation times and are reconciled, never averaged.
 3. **Quota is not derivable from tokens.** Anthropic does not document a conversion, and the account figure also includes usage the application cannot see. The application never computes a quota percentage from tokens. See [QUOTA.md](QUOTA.md).
 4. **OpenTelemetry** adds nothing that the transcripts do not already contain, but it needs a collector process to receive data. It is deliberately not implemented. The identity model (request keyed by the API message id, with the server `request_id` stored alongside) is compatible with it, so adding it later would not double count.
 5. **Claude Desktop Chat, Cowork, claude.ai and other devices cannot be monitored.** Their usage counts toward the account quota but leaves no local trace. This is shown in the interface and never hidden.
-6. **Undocumented interfaces are not relied on.** `plan-usage-history.json` is available as an opt-in, clearly labelled "unverified" hint that never reaches the menu bar or alerts. The private OAuth usage endpoint that some community tools call was not used: it depends on reusing Claude Code's credentials, which the requirements exclude.
+6. **Undocumented interfaces are treated cautiously.** The local usage cache is the primary source, but only because it is provider-written, read locally, opened read-only and validated strictly; it is still labelled as version-dependent. `plan-usage-history.json` remains an opt-in, clearly labelled "unverified" hint that never reaches the menu bar or alerts. The private OAuth usage endpoint that some community tools call was not used: it depends on reusing Claude Code's credentials, which the requirements exclude.
 
 ## 4. OpenAI source audit (Codex, Codex Desktop, ChatGPT Work, ChatGPT Chat)
 
@@ -141,7 +142,7 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 
 ## 7. Background lifecycle
 
-* **Start:** the collector reconciles (import on first run, catch-up afterwards), starts FSEvents watchers for every adapter's folders (Claude transcripts, Codex `sessions` and `archived_sessions`), the process registry and the quota feed folder, and the quota coordinator reads existing quota files.
+* **Start:** the collector reconciles (import on first run, catch-up afterwards), starts FSEvents watchers for every adapter's folders (Claude transcripts, Codex `sessions` and `archived_sessions`), the process registry, the quota feed folder and Claude Code's `.claude.json` file, and the quota coordinator reads existing quota files.
 * **Running:** file events are coalesced for 250 ms, then only the appended bytes are parsed. Quota changes are applied immediately. The user interface is refreshed at most once every two seconds, and only while a window is showing. With every window closed, only cheap state is kept current.
 * **Sleep and wake:** `NSWorkspace.didWakeNotification` triggers a reconciliation and a quota re-read. Time-zone, clock and calendar-day changes trigger a refresh, since bucketing is always computed at query time.
 * **Crash or reboot:** all state is on disk. The next launch resumes from durable checkpoints, runs an integrity check if the previous shutdown was not clean, and replays anything missed. A crash cannot lose or duplicate usage because observations and their checkpoint commit in one transaction and every observation is idempotent.

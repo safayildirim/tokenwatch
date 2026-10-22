@@ -9,7 +9,8 @@ final class QuotaFreshnessTests: XCTestCase {
     private func coordinator(_ env: TestEnv, now: Date) -> QuotaCoordinator {
         QuotaCoordinator(db: env.db, settings: SettingsStore(db: env.db),
                          feeds: .claude(bridgeDirectory: env.root.appendingPathComponent("quota"),
-                                        desktopCache: env.root.appendingPathComponent("none.json")), clock: { now })
+                                        desktopCache: env.root.appendingPathComponent("none.json"),
+                                        cache: env.root.appendingPathComponent("none-cache.json")), clock: { now })
     }
 
     private func window(_ env: TestEnv, now: Date, key: String = "300m", provider: ProviderID = .openAI) async throws -> QuotaWindowState {
@@ -181,7 +182,8 @@ final class QuotaFreshnessTests: XCTestCase {
         try writeBridge(env, observedMs: Clock.nowMs() + 2 * 3_600_000, percent: 99)
         let c = QuotaCoordinator(db: env.db, settings: SettingsStore(db: env.db),
                                  feeds: .claude(bridgeDirectory: env.root.appendingPathComponent("quota"),
-                                                desktopCache: env.root.appendingPathComponent("none.json")))
+                                                desktopCache: env.root.appendingPathComponent("none.json"),
+                                                cache: env.root.appendingPathComponent("none-cache.json")))
         await c.refresh(force: true)
         let state = await c.window("300m")
         XCTAssertNil(state?.utilizationPercent)

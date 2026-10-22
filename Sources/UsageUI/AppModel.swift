@@ -147,7 +147,8 @@ public final class AppModel {
 
     public init(db: UsageDatabase, adapters: [any SourceAdapter]? = nil, quotaFeeds: [any QuotaFeed]? = nil,
                 bridgeDirectory: URL = QuotaPaths.bridgeDirectory, registryDirectory: URL? = nil,
-                desktopCache: URL = QuotaPaths.desktopPlanUsageCache, notificationSink: (any NotificationSink)? = nil) {
+                desktopCache: URL = QuotaPaths.desktopPlanUsageCache, claudeCache: URL = QuotaPaths.claudeCodeCache,
+                notificationSink: (any NotificationSink)? = nil) {
         self.db = db
         notifications = NotificationService(sink: notificationSink ?? SystemNotificationSink())
         let store = SettingsStore(db: db)
@@ -159,7 +160,8 @@ public final class AppModel {
         collector = UsageCollector(db: db, adapters: resolvedAdapters, retentionFloorMs: { store.value.retentionFloorMs },
                                    isSourceEnabled: { !store.value.disabledSources.contains($0.rawValue) })
         liveness = registryDirectory.map { SessionRegistryMonitor(directory: $0, db: db) } ?? SessionRegistryMonitor(db: db)
-        quota = QuotaCoordinator(db: db, settings: store, feeds: quotaFeeds ?? .claude(bridgeDirectory: bridgeDirectory, desktopCache: desktopCache))
+        quota = QuotaCoordinator(db: db, settings: store,
+                                 feeds: quotaFeeds ?? .claude(bridgeDirectory: bridgeDirectory, desktopCache: desktopCache, cache: claudeCache))
         alerts = AlertEngine(db: db)
     }
 
@@ -496,6 +498,16 @@ public final class AppModel {
 
     public var activeSessionCount: Int { overview.activeSessions }
 
+    /// The local Claude Code cache feed's status, including whether its file exists and what it last reported.
+    public var claudeCodeCacheFeed: QuotaFeedStatus? {
+        quotaFeeds.first { $0.id == .claudeCodeCache }
+    }
+
+    /// How Claude quota is currently arriving. This is a presentation of stored observations, never a new percentage.
+    public var claudeQuotaConnection: ClaudeQuotaConnection {
+        ClaudeQuotaConnection.evaluate(pools: quotaPools, feeds: quotaFeeds)
+    }
+
     /// The pool whose figures stand for a provider in the menu bar: among the provider's pools that have a
     /// displayable window, the one that reported most recently.
     func primaryPool(of provider: ProviderID) -> QuotaPoolState? {
@@ -511,9 +523,14 @@ public final class AppModel {
     /// such as one that has just reset, shows a dash in its own place. Showing the other window's figure there would
     /// pass a weekly percentage off as a five-hour one.
     private func figures(of pool: QuotaPoolState, onlyShortest: Bool = false) -> String? {
-        guard pool.windows.contains(where: \.isDisplayable), let first = pool.windows.first, let last = pool.windows.last else { return nil }
+        // The menu bar describes the subscription as a whole. A model-scoped weekly limit has the same duration as the
+        // all-model weekly window, and taking the last window blindly would put the scoped percentage in the weekly
+        // slot. Shared windows are preferred; a pool that has only scoped windows still shows them.
+        let shared = pool.windows.filter { WindowNaming.scopedLabel(fallbackKey: $0.windowKey) == nil }
+        let windows = shared.isEmpty ? pool.windows : shared
+        guard windows.contains(where: \.isDisplayable), let first = windows.first, let last = windows.last else { return nil }
         func text(_ w: QuotaWindowState) -> String { w.isDisplayable ? Self.percentText(w) : "–" }
-        if onlyShortest || pool.windows.count == 1 { return text(first) }
+        if onlyShortest || windows.count == 1 { return text(first) }
         return text(first) + " · " + text(last)
     }
 

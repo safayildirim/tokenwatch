@@ -97,7 +97,9 @@ final class NotificationServiceTests: XCTestCase {
     func testTheModelShowsWhyTheTestFailed() async throws {
         let env = try UIEnv()
         let model = AppModel(db: env.db, adapters: [], bridgeDirectory: env.quotaDir, registryDirectory: env.registryDir,
-                             desktopCache: env.root.appendingPathComponent("none.json"), notificationSink: FakeSink(.denied))
+                             desktopCache: env.root.appendingPathComponent("none.json"),
+                             claudeCache: env.root.appendingPathComponent("none-cache.json"),
+                             notificationSink: FakeSink(.denied))
         await model.sendTestNotification()
         XCTAssertEqual(model.notificationPermission, .denied)
         XCTAssertNotNil(model.notificationProblem)

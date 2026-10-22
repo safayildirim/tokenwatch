@@ -4,7 +4,7 @@ A native macOS menu bar app that watches your AI coding usage in the background,
 
 * **Local-first.** No network access. Only usage metadata is stored: token counts, model names, timestamps, project folder names, session ids. Never prompts, replies, file contents, environment variables or credentials.
 * **Exact.** Token totals match an independent recount of the original files to the token (see [VALIDATION](docs/VALIDATION.md)). Streaming snapshots, replays after compaction and forked sub-agents are deduplicated, so cache tokens are not counted two to three times over.
-* **Honest about quota.** Percentages come only from the provider's own reports (Claude's `rate_limits`, Codex's `rate_limits` snapshots). They are never derived from token counts, they belong to one pool of one account, and pools are never added together. When nothing has been reported, the app says "Unavailable". ChatGPT Chat and Claude chat cannot be observed, and the app says that too.
+* **Honest about quota.** Percentages come only from the provider's own reports (Claude Code's local `cachedUsageUtilization` snapshot, the optional status line, and Codex's `rate_limits` snapshots). They are never derived from token counts, they belong to one pool of one account, and pools are never added together. When nothing has been reported, the app says "Unavailable". ChatGPT Chat and Claude chat cannot be observed, and the app says that too.
 * **Honest about plans.** Capacity Analysis compares how much provider-reported quota the same normalized local work consumed on different subscription plans. It publishes a ratio only with enough independent quota cycles, and otherwise says the evidence is insufficient. Advertised multipliers are labeled references, never measurements. Weekly multipliers are not advertised and are not invented.
 * **Light.** About 75 MB resident and well under 1 % CPU when idle. A 5.8 GB history (Claude and Codex) imports in about 8 seconds. (With the dashboard open beside a streaming session, about 1 % CPU.)
 
@@ -79,18 +79,21 @@ A **scope bar** above every page filters by provider, product, account and surfa
 
 **Codex needs none**: it writes its own quota snapshots into its session files, so they appear as soon as you use it.
 
-**Claude (one minute).** Claude Code reports subscription usage only to a configured status line. Open **Settings → Quota → Install helper…** (or the Quota page). The app shows exactly what it will change, makes a backup of `~/.claude/settings.json`, adds a `statusLine` entry without disturbing anything else, and keeps any status line you already have working. Then start a new terminal Claude Code session and send a message; quota appears.
+**Claude needs no setup for the baseline.** Claude Code keeps its last subscription usage snapshot in `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`). Tokenwatch discovers it, reads it read-only, and shows the 5-hour, weekly, and model-scoped windows with the snapshot's own observation time. Opening `/usage` in Claude Code is the practical way to ask it to refresh the snapshot, although the trigger is not documented. If the cache is stale, the app says so instead of pretending it is live.
 
-Details, limits and manual setup: [QUOTA](docs/QUOTA.md). Quota can only be reported while a terminal Claude Code session is in use, and only for subscribers.
+The **status line helper is optional** and complementary. It provides the documented `rate_limits` values, reset times while a terminal session is active, and a second observation when the cache is missing. Install it from **Settings → Quota → Install helper…** (or the Quota page): the app shows exactly what it will change, makes a backup of `~/.claude/settings.json`, adds a `statusLine` entry without disturbing anything else, and keeps any status line you already have working.
+
+Details, limits and manual setup: [QUOTA](docs/QUOTA.md). The local cache is refreshed by Claude Code, not continuously. Status-line quota is reported only while a terminal session is in use and only for subscribers.
 
 ### Capacity analysis
 
 Open **Capacity Analysis** and record which plan was active over each period (upgrades and downgrades
 are separate, non-overlapping periods; "unknown" is allowed). All Claude readings belong to the
-explicit unassigned account because the status line names no account, so the app never guesses that
-two readings are the same subscription. The more independent five-hour or weekly cycles you have on
-each plan, the stronger the evidence; at least two independent cycles per plan and either two matched
-pairs or a comparable pooled comparison are required before a ratio is shown.
+explicit unassigned account because the status line names no account and the cache hash is used only
+to notice an account change, so the app never guesses that two readings are the same subscription.
+The more independent five-hour or weekly cycles you have on each plan, the stronger the evidence; at
+least two independent cycles per plan and either two matched pairs or a comparable pooled comparison
+are required before a ratio is shown.
 
 The ratio is measured from provider percentages and local work normalized by API-equivalent cost. It
 is not derived from tokens, and the advertised five-hour multipliers are shown only as references.
@@ -133,14 +136,15 @@ Use `--db PATH`, `--root PATH` (Claude) and `--codex-home PATH` (Codex) to work 
 swift test
 ```
 
-348 tests: token accounting and deduplication for both providers, Codex file shapes (event, usage-record, fork, compacted, compressed, damaged, archived), OpenAI quota (pools, windows, cycles, freshness, out-of-order, shared pool), alert identity, provider isolation and a made-up third provider through the whole pipeline, session discovery (including real FSEvents), persistence and concurrency, calendar and DST boundaries, cost, OpenAI prices, quota freshness under replays and restarts, Codex forks and mixed file formats, subscription-capacity arithmetic, plan history, evidence policy and purchasing strategies, an accelerated run of weeks of use, notification delivery, single-instance start-up, export, privacy, the app's state machine, and offscreen rendering of every page in light and dark. Results and what each group proves: [VALIDATION](docs/VALIDATION.md).
+402 tests: 338 core tests (37.0 s, 0 failures, 1 skipped) and 64 UI tests compiled; the full UI suite was not rerun for this change. Coverage includes token accounting and deduplication for both providers, Codex file shapes (event, usage-record, fork, compacted, compressed, damaged, archived), OpenAI and Claude quota (pools, windows, cycles, freshness, out-of-order, scoped windows, source conflicts, shared pool), the local Claude cache (real-shape parsing, structured and legacy windows, malformed and unknown schemas, permissions, symlinks and hard links, atomic replacement, duplicate and stale readings, restart recovery, privacy), alert identity, provider isolation and a made-up third provider through the whole pipeline, session discovery (including real FSEvents), persistence and concurrency, calendar and DST boundaries, cost, OpenAI prices, quota freshness under replays and restarts, Codex forks and mixed file formats, subscription-capacity arithmetic, plan history, evidence policy and purchasing strategies, an accelerated run of weeks of use, notification delivery, single-instance start-up, export, privacy, the app's state machine, and offscreen rendering of every page in light and dark. Results and what each group proves: [VALIDATION](docs/VALIDATION.md).
 
 ## Privacy and security
 
 * No outbound network connections, no analytics, no telemetry. (Check with `lsof -i -a -p $(pgrep Tokenwatch)`.)
 * The line parser skips message content without decoding it. A test plants secrets in prompts, replies, tool output and titles and asserts they never reach the database, its WAL, or any export.
 * The status line helper stores only the rate-limit figures and session id, with `0600` permissions, and never exits non-zero.
-* The Claude Code `.key` files (peer tokens) and Codex's `auth.json` are never opened. No credentials are read, stored or transmitted. Account identifiers are stored only as one-way hashes.
+* Claude Code's local usage cache is opened read-only with `O_NOFOLLOW`; only a regular, owner-only file with one link is accepted, and only the `cachedUsageUtilization` object is parsed. Unrelated settings, project data and secrets are not retained. The raw account identifier is not stored or displayed; a one-way short hash is used only to notice an account change.
+* The Claude Code `.key` files (peer tokens), OAuth tokens, cookies, Keychain records and Codex's `auth.json` are never opened. No credentials are read, stored or transmitted. Account identifiers are stored only as one-way hashes.
 * The app is not sandboxed because it must read `~/.claude`. It does not weaken any macOS protection and asks for no special permission.
 
 ## Documentation
@@ -162,9 +166,9 @@ swift test
 | Per-request tokens | Yes (transcripts) | Yes (session files) | Not observable | Not observable |
 | Cache read and write | Yes, with the 5-minute and 1-hour split | Cached input yes, writes always zero so far | | |
 | Reasoning tokens | Not reported | Yes, a part of output | | |
-| Quota percentage | Yes, **only** through the status line helper and only in a terminal session | Yes, in every session file, no setup | Counts toward the Claude allowance, not observable | Own limits, not observable |
-| Reset times | Yes (same source) | Yes | | |
-| Accounts | One pool (Claude Code's status line names no account) | One pool per account, from the file header. Older files have none, so they form the unassigned account | | |
+| Quota percentage | Yes, automatically from Claude Code's local usage cache; the optional status line adds a second, documented observation | Yes, in every session file, no setup | Counts toward the Claude allowance, not observable | Own limits, not observable |
+| Reset times | Yes (cache and status line) | Yes | | |
+| Accounts | One explicit unassigned pool; the cache hash detects account changes but is not exposed, and the status line names no account | One pool per account, from the file header. Older files have none, so they form the unassigned account | | |
 | Live process state | Yes (process registry) | No, status is inferred and labelled so | | |
 | Own cost figure | Claude Code's per-session summary, shown beside the estimate | No | | |
 | Prices built in | Yes (Anthropic list prices) | Yes, for the models OpenAI publishes, with dates (see below) | | |
@@ -177,7 +181,7 @@ Costs are **API-equivalent estimates**: what the same tokens would cost at pay-a
 
 ### Quota freshness
 
-A quota reading is exactly as old as the moment it was taken. Reading a file again, restarting, copying or archiving a file, or rebuilding the database never makes it fresher, because the app stores no ingestion time for quota at all. A window that has reset is shown as unknown, never as 0 %. Details and tests: [QUOTA](docs/QUOTA.md#freshness-guarantees).
+A quota reading is exactly as old as the moment it was taken. For Claude's local cache that is `cachedUsageUtilization.fetchedAtMs`, never the file's modification time. Reading a file again, restarting, copying or archiving a file, or rebuilding the database never makes it fresher, because the app stores no ingestion time for quota at all. The cache is fresh for 1 hour and stale after 2; the status line is fresh for 10 minutes and stale after 1 hour. A window that has reset is shown as unknown, never as 0 %. Details and tests: [QUOTA](docs/QUOTA.md#freshness-guarantees).
 
 ### Codex accounting, confirmed and not
 
@@ -187,10 +191,10 @@ Verified against Codex's own running counters, not only against a second count o
 
 Ordered by how much they can matter to you.
 
-1. **Claude quota has not been seen from a live subscription.** The helper is not installed in your Claude Code settings. The helper, evaluator and coordinator are tested end to end and `tw statusline-check` rehearses the whole path on a copy of your settings, but until you install the helper and send one message in a terminal Claude Code session, the Claude quota stays "Unavailable". It is only reported while a terminal session is in use (VS Code and Desktop Code sessions do not run the status line), and only for subscribers.
+1. **Claude quota has been read from the real local cache, but not compared with `/usage`.** On this Mac (Claude Code 2.1.305), the cache was 119,704 bytes, mode `0600`, and read successfully without changing its bytes or modification time. Its snapshot was about 3.2 hours old (the file mtime was newer), and the quota evaluation correctly showed the 5-hour, weekly and scoped `Fable` windows as stale. The optional helper is not installed. `/usage` is an interactive terminal screen and no supported non-interactive structured interface was found, so the cache refresh trigger and a side-by-side `/usage` comparison remain unverified. The cache is the automatic baseline; the status line is optional.
 2. **Notifications are not verified as delivered.** macOS recorded a denial for the app on this Mac. The flow reports it correctly. Allow the app in System Settings → Notifications, then use the test button.
 3. **Only coding tools are observable.** claude.ai chat, Cowork, Claude Desktop chat, ChatGPT Chat and other devices consume quota but leave no local record. Local token totals can therefore be lower than your real consumption, and the dashboard says so.
-4. **Two accounts of one provider that the files do not name** (Claude always, Codex files written before an account id existed) share one pool. Their readings are kept as separate cycles when their reset times differ by more than 30 seconds, and nothing else can separate them.
+4. **Two accounts of one provider that the files do not name** share one pool. This applies to Claude: the cache hash detects a change but is not used to split pools, and the status line has no identity. Codex files written before an account id existed are also unassigned. Their readings are kept as separate cycles when their reset times differ by more than 30 seconds, and nothing else can separate them.
 5. **The menu bar icon can be hidden by macOS.** On a Mac with a notch and a full menu bar, the icon can land under the notch. The app detects it and offers a Dock icon, but it cannot move the icon. This is the case on the Mac this was developed on.
 6. **Codex's file format is alpha** (`0.162.0-alpha`). The parser is tolerant, and a line that should report usage but does not look right is reported in Diagnostics instead of counting as nothing, but a future change of shape could need an update. A fork whose parent's file is not on the Mac is accounted by time and flagged.
 7. **A custom `$CODEX_HOME`** is read at start-up. A GUI app does not inherit a shell's environment, so it needs `launchctl setenv CODEX_HOME …` and a restart.

@@ -31,6 +31,7 @@ public extension SurfaceID {
 
 public extension TelemetrySourceID {
     static let claudeTranscripts: TelemetrySourceID = "claude-code-transcripts"
+    static let claudeCodeCache: TelemetrySourceID = "claude-code-local-cache"
     static let claudeStatusLine: TelemetrySourceID = "claude-code-statusline"
     static let claudeDesktopCache: TelemetrySourceID = "claude-desktop-plan-cache"
     static let codexRollouts: TelemetrySourceID = "codex-rollouts"
@@ -44,7 +45,7 @@ public extension ProviderRegistry {
         ],
         products: [
             ProductDefinition(id: .claudeCode, provider: .anthropic, name: "Claude Code",
-                              observability: "Sessions and per-request tokens are observed from local transcripts. Quota is observed through the status line helper."),
+                              observability: "Sessions and per-request tokens are observed from local transcripts. Subscription quota is read from Claude Code's local usage cache; the status line is an optional second source."),
             ProductDefinition(id: .claudeChat, provider: .anthropic, name: "Claude Chat and Cowork",
                               observability: "Not observable. These products leave no usage records on this Mac, although they count toward the same subscription.",
                               isObservable: false),
@@ -86,10 +87,15 @@ public extension ProviderRegistry {
                 capabilities: [.sessions, .requestTokens, .cacheTokens, .reasoningTokens, .models, .reportedCost, .liveSessionState],
                 limitations: "Covers Claude Code only. Claude chat and Cowork usage leaves no local record."),
             TelemetrySourceDefinition(
-                id: .claudeStatusLine, provider: .anthropic, products: [.claudeCode], kind: .quotaFeed,
-                name: "Claude Code status line",
+                id: .claudeCodeCache, provider: .anthropic, products: [.claudeCode], kind: .quotaFeed,
+                name: "Claude Code local usage cache",
                 capabilities: [.quotaUtilization, .quotaResetTimes],
-                limitations: "Updates only while a terminal Claude Code session is in use, and only for subscribers."),
+                limitations: "Read-only snapshot in Claude Code's .claude.json. Claude Code refreshes it when it fetches usage, so it can be stale. Its layout is version-dependent and undocumented; account identity is reduced to a change-detection hash and is not shown."),
+            TelemetrySourceDefinition(
+                id: .claudeStatusLine, provider: .anthropic, products: [.claudeCode], kind: .quotaFeed,
+                name: "Claude Code status line (optional)",
+                capabilities: [.quotaUtilization, .quotaResetTimes],
+                limitations: "Optional. Updates only while a terminal Claude Code session is in use, and only for subscribers."),
             TelemetrySourceDefinition(
                 id: .claudeDesktopCache, provider: .anthropic, products: [.claudeChat, .claudeCode], kind: .quotaFeed,
                 name: "Claude Desktop plan cache (undocumented)",

@@ -6,7 +6,6 @@ Tokenwatch is a native macOS menu bar app that monitors AI coding usage across p
 
 These are architectural and product constraints. If a task conflicts with one, explain the conflict before making changes.
 
-- **Local-first privacy:** The app has no network access. It stores only usage metadata: token counts, model names, timestamps, project folder names, and session identifiers. It never stores prompts, replies, file contents, environment variables, or credentials.
 - **Honest quota:** A quota percentage is shown only when the provider itself reported it. It is never computed from token counts, and the UI never fills a gap with an estimate. See `docs/QUOTA.md`.
 - **Canonical rules:** Pricing, token accounting, and quota rules are defined once, in `UsageCore`. `docs/TOKEN-ACCOUNTING.md` is the reference for them. The UI may contain presentation metadata, such as labels and colors, but never a competing formula.
 - **Thin UI:** `UsageCore` has no UI dependency, so the menu bar app, the `tw` tool, and the tests all run the same code. Views present values that `UsageCore` computes and never recompute costs, token totals, quota, or capacity themselves.

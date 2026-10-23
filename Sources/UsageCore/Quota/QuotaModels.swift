@@ -138,7 +138,7 @@ public enum QuotaAvailability: Sendable, Equatable {
     case unavailable(UnavailableReason)
 
     public enum UnavailableReason: String, Sendable, Equatable {
-        /// No reading has ever been received, for example because the status line bridge is not installed.
+        /// No reading has ever been received, for example because Claude Code has not written a usage snapshot yet.
         case noData
     }
 }
@@ -254,8 +254,8 @@ public enum QuotaEvaluator {
         // A reading whose window is still open beats any whose window has closed, because a newer
         // window's report must not be hidden behind an older one that happens to be more recent.
         let open = eligible.filter { ($0.resetsAt ?? .distantFuture) > now }
-        // The latest provider observation wins. When two sources carry exactly the same timestamp, the documented
-        // status-line source is preferred over the local cache, and the cache over the undocumented Desktop hint. The
+        // The latest provider observation wins. When two sources carry exactly the same timestamp, the local cache
+        // is preferred over the undocumented Desktop hint. The
         // percentage is considered only after those, so no source can win merely by reporting a larger number.
         var chosen = (open.isEmpty ? eligible : open).max {
             (observationRank($0, now: now), QuotaSourcePolicy.priority(for: $0.source), $0.utilizationPercent)
@@ -293,7 +293,7 @@ public enum QuotaEvaluator {
     }
 
     /// A disagreement is only interesting when two sources describe the same cycle at about the same time. A cache
-    /// fetched twenty minutes before the status line normally holds an older percentage; that is elapsed usage, not a
+    /// fetched twenty minutes before another source normally holds an older percentage; that is elapsed usage, not a
     /// conflict. The values are compared, never averaged.
     private static func sourceConflict(chosen: QuotaReading, eligible: [QuotaReading]) -> QuotaSourceConflict? {
         guard let cycle = chosen.cycleID else { return nil }

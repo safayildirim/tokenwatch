@@ -110,7 +110,7 @@ struct OverviewLimits: View {
 
     private func poolCard(_ pool: QuotaPoolState) -> some View {
         let info = pool.pool
-        let connected = !(model.needsSetup(info) && pool.windows.allSatisfy { $0.reading == nil })
+        let connected = !(model.lacksClaudeFigure(info) && pool.windows.allSatisfy { $0.reading == nil })
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Circle().fill(model.providerColor(info.key.provider)).frame(width: 10, height: 10)
@@ -129,7 +129,7 @@ struct OverviewLimits: View {
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("No Claude limits reported yet").fontWeight(.semibold)
-                    Text("Tokenwatch reads Claude Code's local usage cache automatically. The snapshot appears when Claude Code next fetches usage; the optional status line can also supply one.")
+                    Text("Tokenwatch reads Claude Code's local usage cache automatically. The snapshot appears when Claude Code next fetches usage.")
                         .foregroundStyle(.secondary).frame(maxWidth: 520, alignment: .leading).fixedSize(horizontal: false, vertical: true)
                     Button("Open Limits") { model.selection = .quota }.buttonStyle(.borderedProminent)
                 }

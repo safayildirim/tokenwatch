@@ -27,16 +27,15 @@ extension AppModel {
         return first.map { DisplayText.localized($0.name) } ?? providerName(id)
     }
 
-    /// True when a pool has no figure yet because there is neither a local cache nor the optional status-line helper.
+    /// True when a pool has no figure yet because Claude Code has not written a usable usage snapshot.
     ///
-    /// The cache needs no setup: Claude Code writes it itself. Treating the status-line helper as the only possible
-    /// source is what made a working local cache look disconnected.
-    func needsSetup(_ pool: QuotaPoolInfo) -> Bool {
+    /// Nothing has to be set up for this: Claude Code writes its local cache itself, so the figure appears as soon as
+    /// the cache holds a snapshot.
+    func lacksClaudeFigure(_ pool: QuotaPoolInfo) -> Bool {
         guard pool.key.provider == .anthropic else { return false }
-        if claudeHelperInstalled { return false }
         switch claudeQuotaConnection {
         case .noData, .collectionError: return true
-        case .localCache, .statusLine, .stale: return false
+        case .localCache, .stale: return false
         }
     }
 
@@ -135,8 +134,6 @@ struct QuotaMeter: View {
     @Environment(AppModel.self) private var model
     var state: QuotaWindowState
     var compact = false
-    /// Called by the "Set up" button when the window has no data and a helper has to be installed first.
-    var onSetup: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 4 : 6) {
@@ -208,10 +205,7 @@ struct QuotaMeter: View {
             Text("This window reset \(Fmt.relative(at)). The new value appears after \(model.providerName(state.pool.key.provider)) next reports it.")
                 .font(.caption).foregroundStyle(.secondary)
         case .unavailable:
-            HStack {
-                Text("No authoritative quota data yet.").font(.caption).foregroundStyle(.secondary)
-                if let onSetup { Button("Set up", action: onSetup).controlSize(.mini) }
-            }
+            Text("No authoritative quota data yet.").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -248,7 +242,6 @@ struct QuotaPoolCard: View {
     @Environment(AppModel.self) private var model
     var pool: QuotaPoolState
     var compact = false
-    var onSetup: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 12) {
@@ -267,7 +260,7 @@ struct QuotaPoolCard: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(pool.windows) { w in
-                QuotaMeter(state: w, compact: compact, onSetup: model.needsSetup(pool.pool) ? onSetup : nil)
+                QuotaMeter(state: w, compact: compact)
             }
         }
     }

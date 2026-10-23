@@ -11,7 +11,7 @@ final class UIEnv {
     let root: URL
     let projects: URL
     let codexHome: URL
-    let quotaDir: URL
+    let claudeCache: URL
     let registryDir: URL
     let db: UsageDatabase
     let model: AppModel
@@ -20,13 +20,13 @@ final class UIEnv {
         root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tw-ui-\(UUID().uuidString)")
         projects = root.appendingPathComponent("projects")
         codexHome = root.appendingPathComponent("codex-home")
-        quotaDir = root.appendingPathComponent("quota")
+        claudeCache = root.appendingPathComponent("claude/.claude.json")
         registryDir = root.appendingPathComponent("sessions")
-        for d in [projects, quotaDir, registryDir] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        for d in [projects, claudeCache.deletingLastPathComponent(), registryDir] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         db = try UsageDatabase.open(at: root.appendingPathComponent("db/usage.sqlite"))
-        model = AppModel(db: db, adapters: [ClaudeCodeAdapter(root: projects), CodexAdapter(home: codexHome)], bridgeDirectory: quotaDir,
+        model = AppModel(db: db, adapters: [ClaudeCodeAdapter(root: projects), CodexAdapter(home: codexHome)],
                          registryDirectory: registryDir, desktopCache: root.appendingPathComponent("none.json"),
-                         claudeCache: root.appendingPathComponent("none-cache.json"))
+                         claudeCache: claudeCache)
         model.uiVisibilityOverride = true
     }
 
@@ -71,12 +71,17 @@ final class UIEnv {
         try (out.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("rollout-2026-10-12T12-00-00-\(id).jsonl"), atomically: true, encoding: .utf8)
     }
 
+    /// Replaces Claude Code's state file with one that holds a usage snapshot, the way Claude Code writes it.
     func writeQuota(five: Double?, week: Double?, observed: Date = Date(), resetsIn: TimeInterval = 3600) throws {
-        var limits: [String: QuotaBridgeFile.Window] = [:]
-        if let five { limits["five_hour"] = .init(usedPercentage: five, resetsAt: observed.addingTimeInterval(resetsIn).timeIntervalSince1970) }
-        if let week { limits["seven_day"] = .init(usedPercentage: week, resetsAt: observed.addingTimeInterval(resetsIn * 40).timeIntervalSince1970) }
-        let f = QuotaBridgeFile(sessionId: "s1", observedAt: Clock.ms(observed), capturedAt: Clock.ms(observed), fingerprint: UUID().uuidString, rateLimits: limits)
-        try JSONEncoder().encode(f).write(to: quotaDir.appendingPathComponent("statusline-s1.json"))
+        func window(_ name: String, _ percent: Double?, resets: TimeInterval) -> String? {
+            guard let percent else { return nil }
+            let stamp = ISO8601DateFormatter().string(from: observed.addingTimeInterval(resets))
+            return "\"\(name)\":{\"utilization\":\(percent),\"resets_at\":\"\(stamp)\"}"
+        }
+        let windows = [window("five_hour", five, resets: resetsIn), window("seven_day", week, resets: resetsIn * 40)].compactMap { $0 }
+        let json = "{\"cachedUsageUtilization\":{\"accountUuid\":\"11111111-2222-4333-8444-555555555555\",\"fetchedAtMs\":\(Clock.ms(observed)),\"utilization\":{\(windows.isEmpty ? "\"five_hour\":null" : windows.joined(separator: ","))}}}"
+        try Data(json.utf8).write(to: claudeCache, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: claudeCache.path)
     }
 
     func waitUntil(_ timeout: TimeInterval = 15, _ condition: @MainActor () -> Bool) async {

@@ -199,8 +199,8 @@ public enum ClaudeCodeCacheSource {
     }
 
     /// The stable, non-reversible account reference for a cache snapshot. Cache observations use it, so two accounts
-    /// never share a quota pool. The optional status line carries no account identity and remains unassigned; matching
-    /// its readings to this account by timestamp or percentage would be a guess.
+    /// never share a quota pool. Readings from sources that name no account stay unassigned; matching them to this
+    /// account by timestamp or percentage would be a guess.
     ///
     /// Only the short hash leaves the parser; the UUID is not stored anywhere.
     public static func accountReference(_ raw: String) -> AccountRef? {

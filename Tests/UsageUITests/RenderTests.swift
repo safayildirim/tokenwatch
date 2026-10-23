@@ -63,7 +63,7 @@ final class RenderTests: XCTestCase {
                                  accountLabel: "Unassigned", name: "Claude subscription")
         func reading(_ pct: Double, resets: TimeInterval?, ago: TimeInterval, authority: QuotaAuthority = .authoritative) -> QuotaReading {
             QuotaReading(utilizationPercent: pct, resetsAt: resets.map { now.addingTimeInterval($0) },
-                         observedAt: now.addingTimeInterval(-ago), source: .claudeStatusLine, authority: authority)
+                         observedAt: now.addingTimeInterval(-ago), source: "test-quota-source", authority: authority)
         }
         func evaluate(_ readings: [QuotaReading], unverified: Bool = false) -> QuotaWindowState {
             QuotaEvaluator.evaluate(pool: pool, windowKey: "300m", windowMinutes: 300, readings: readings, now: now, allowUnverified: unverified)
@@ -80,7 +80,7 @@ final class RenderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: env.root) }
         var digests: [String: String] = [:]
         for (name, state) in states {
-            let rep = try await renderOrFail(QuotaMeter(state: state, onSetup: {}).environment(env.model).padding().frame(width: 400).background(Color.white), size: CGSize(width: 400, height: 130))
+            let rep = try await renderOrFail(QuotaMeter(state: state).environment(env.model).padding().frame(width: 400).background(Color.white), size: CGSize(width: 400, height: 130))
             XCTAssertGreaterThan(inkRatio(rep), 0.02, "\(name) should draw something")
             digests[name] = digest(rep)
         }

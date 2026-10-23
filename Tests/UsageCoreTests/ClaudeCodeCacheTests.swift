@@ -285,7 +285,7 @@ final class ClaudeCodeCacheTests: XCTestCase {
         for observation in reading.observations {
             XCTAssertFalse(String(describing: observation).contains(account))
             XCTAssertFalse(observation.account.isUnassigned,
-                           "the cache names its account, so its readings must not share the status line's unassigned pool")
+                           "the cache names its account, so its readings must not share the unassigned pool")
             XCTAssertEqual(observation.account.hash, fingerprint)
             XCTAssertEqual(observation.account.provider, .anthropic)
         }

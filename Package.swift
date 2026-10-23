@@ -7,7 +7,6 @@ let package = Package(
     products: [
         .library(name: "UsageCore", targets: ["UsageCore"]),
         .executable(name: "tw", targets: ["tw"]),
-        .executable(name: "tw-statusline", targets: ["tw-statusline"]),
         .library(name: "UsageUI", targets: ["UsageUI"]),
         .executable(name: "Tokenwatch", targets: ["Tokenwatch"]),
     ],
@@ -34,8 +33,7 @@ let package = Package(
         .executableTarget(name: "tw", dependencies: ["UsageCore"]),
         // Tiny helper that Claude Code runs as its status line command. It deliberately avoids
         // depending on UsageCore so that its start-up cost stays minimal.
-        .executableTarget(name: "tw-statusline"),
-        .testTarget(name: "UsageCoreTests", dependencies: ["UsageCore", "tw-statusline"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "UsageCoreTests", dependencies: ["UsageCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "UsageUITests", dependencies: ["UsageUI", "UsageCore"]),
     ]
 )

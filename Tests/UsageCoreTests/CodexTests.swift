@@ -514,9 +514,8 @@ final class OpenAIQuotaTests: XCTestCase {
     private func coordinator(_ env: TestEnv, now: Date? = nil) -> QuotaCoordinator {
         let at = now ?? self.now
         return QuotaCoordinator(db: env.db, settings: SettingsStore(db: env.db),
-                                feeds: .claude(bridgeDirectory: env.root.appendingPathComponent("quota"),
-                                               desktopCache: env.root.appendingPathComponent("none.json"),
-                                               cache: env.root.appendingPathComponent("none-cache.json")), clock: { at })
+                                feeds: .claude(desktopCache: env.root.appendingPathComponent("none.json"),
+                                               cache: env.root.appendingPathComponent("claude/.claude.json")), clock: { at })
     }
 
     private func openAIPools(_ env: TestEnv, now: Date? = nil) async -> [QuotaPoolState] {
@@ -722,13 +721,9 @@ final class OpenAIQuotaTests: XCTestCase {
         try env.codexFile(session: CF.sessionA, lines: [CF.header(id: CF.sessionA, at: t0, account: "acct-one"), event(1, at: t0 + 1_000, rate: CF.rateLimits())])
         try env.syncCodex()
         let c = coordinator(env)
-        let bridge = env.root.appendingPathComponent("quota")
-        try FileManager.default.createDirectory(at: bridge, withIntermediateDirectories: true)
         let observed = Date(timeIntervalSince1970: Double(t0) / 1000)
-        let file = QuotaBridgeFile(sessionId: "s", observedAt: Clock.ms(observed), capturedAt: Clock.ms(observed), fingerprint: "f",
-                                   rateLimits: ["five_hour": .init(usedPercentage: 77, resetsAt: Double(t0) / 1000 + 3600),
-                                                "seven_day": .init(usedPercentage: 12, resetsAt: Double(t0) / 1000 + 86400)])
-        try JSONEncoder().encode(file).write(to: bridge.appendingPathComponent("statusline-s.json"))
+        try ClaudeCacheFixture.write(to: env.root.appendingPathComponent("claude/.claude.json"), fetchedAt: observed, five: 77, week: 12,
+                                     fiveReset: observed.addingTimeInterval(3600), weekReset: observed.addingTimeInterval(86400))
         await c.refresh(force: true)
         let all = await c.pools()
         let claude = try XCTUnwrap(all.first { $0.pool.key.provider == .anthropic })

@@ -19,7 +19,7 @@ final class AppModelTests: XCTestCase {
     func testMissingClaudeFolderIsReportedNotTreatedAsAnError() async throws {
         let env = try UIEnv()
         let model = AppModel(db: env.db, adapters: [ClaudeCodeAdapter(root: env.root.appendingPathComponent("nope"))],
-                             bridgeDirectory: env.quotaDir, registryDirectory: env.registryDir,
+                             registryDirectory: env.registryDir,
                              desktopCache: env.root.appendingPathComponent("none.json"),
                              claudeCache: env.root.appendingPathComponent("none-cache.json"))
         await model.start()
@@ -93,7 +93,7 @@ final class AppModelTests: XCTestCase {
 
     func testAScopedWeeklyWindowDoesNotTakeTheWeeklySlotInTheMenuBar() async throws {
         let env = try UIEnv()
-        let cache = env.root.appendingPathComponent("none-cache.json")
+        let cache = env.claudeCache
         let reset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(6 * 3600))
         let json = """
         {"cachedUsageUtilization":{"accountUuid":"A1B2C3D4-E5F6-4789-8ABC-DEF012345678",

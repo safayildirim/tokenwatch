@@ -146,13 +146,6 @@ final class PrivacyTests: XCTestCase {
         // The metadata that is needed is still there.
         XCTAssertEqual(try env.totals().tokens.output, 5)
     }
-
-    func testStatusLineBridgeDoesNotCopyUnrelatedInput() throws {
-        // Covered end to end in BridgeBinaryTests.testWritesOnlyTheRateLimitsAndPrintsASummary; this
-        // test documents that the stored file type cannot even represent anything else.
-        let mirror = Mirror(reflecting: QuotaBridgeFile(sessionId: "s", observedAt: 0, capturedAt: 0, fingerprint: "", rateLimits: [:]))
-        XCTAssertEqual(Set(mirror.children.compactMap(\.label)), ["schema", "sessionId", "observedAt", "capturedAt", "fingerprint", "rateLimits"])
-    }
 }
 
 final class SourceVerifierTests: XCTestCase {

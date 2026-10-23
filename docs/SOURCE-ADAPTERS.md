@@ -53,9 +53,8 @@ produce:
   identifier. If it does not, `AccountRef.unassigned` is the honest value. A source's plan name is
   metadata, not an account identity, and is never used to split an unassigned account.
 * **Optional plan metadata.** A source that reports a plan type may create a plan period with
-  `providerReported` provenance. Claude's local cache reports a change-detection hash but no verified
-  account or plan identity, and its status line reports neither, so Claude's plan periods are manual
-  and explicitly labelled as such.
+  `providerReported` provenance. Claude's local cache names an account, which is kept only as a one-way hash, but it reports no
+  verified plan identity, so Claude's plan periods are manual and explicitly labelled as such.
 
 The five-hour and weekly windows remain separate inputs. The analyzer never infers one from the
 other, and it never derives a quota percentage from tokens. Providers with no registered plans still

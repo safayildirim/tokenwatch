@@ -7,8 +7,11 @@ final class QuotaEvaluatorTests: XCTestCase {
     private let pool = QuotaPoolInfo(key: QuotaPoolKey(provider: .anthropic, accountID: 1, poolKey: "claude-subscription"),
                                      accountLabel: "Unassigned", name: "Claude subscription")
 
+    /// A source with no special freshness rules, so these tests exercise the evaluator's default thresholds.
+    private static let testSource: TelemetrySourceID = "test-quota-source"
+
     private func reading(_ pct: Double, resets: TimeInterval?, observedAgo: TimeInterval = 30,
-                         authority: QuotaAuthority = .authoritative, source: TelemetrySourceID = .claudeStatusLine) -> QuotaReading {
+                         authority: QuotaAuthority = .authoritative, source: TelemetrySourceID = QuotaEvaluatorTests.testSource) -> QuotaReading {
         QuotaReading(utilizationPercent: pct, resetsAt: resets.map { now.addingTimeInterval($0) },
                      observedAt: now.addingTimeInterval(-observedAgo), source: source, authority: authority)
     }
@@ -151,42 +154,7 @@ final class RetryPolicyTests: XCTestCase {
     }
 }
 
-final class StatusLineSourceTests: XCTestCase {
-    private func write(_ file: QuotaBridgeFile, name: String, in dir: URL) throws {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try JSONEncoder().encode(file).write(to: dir.appendingPathComponent(name))
-    }
-
-    func testBridgeFilesBecomeAuthoritativeReadings() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        let now = Date()
-        try write(QuotaBridgeFile(sessionId: "s1", observedAt: Clock.ms(now), capturedAt: Clock.ms(now), fingerprint: "f", rateLimits: [
-            "five_hour": .init(usedPercentage: 63, resetsAt: now.timeIntervalSince1970 + 7200),
-            "seven_day": .init(usedPercentage: 81.5, resetsAt: now.timeIntervalSince1970 + 86400),
-            "mystery": .init(usedPercentage: 5, resetsAt: nil),
-        ]), name: "statusline-s1.json", in: dir)
-        let readings = StatusLineQuotaSource.observations(in: dir, now: now)
-        XCTAssertEqual(readings.count, 2, "unknown window names are ignored")
-        XCTAssertTrue(readings.allSatisfy { $0.authority == .authoritative && $0.originSession == "s1" && $0.poolKey == "claude-subscription" })
-        XCTAssertTrue(readings.allSatisfy { $0.provider == .anthropic && $0.account.isUnassigned })
-        XCTAssertEqual(readings.first { $0.windowKey == "10080m" }?.utilizationPercent, 81.5)
-        XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.windowMinutes, 300)
-    }
-
-    func testCorruptAndForeignFilesAreIgnoredAndOldOnesPruned() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try "not json".write(to: dir.appendingPathComponent("statusline-bad.json"), atomically: true, encoding: .utf8)
-        try "{}".write(to: dir.appendingPathComponent("other.json"), atomically: true, encoding: .utf8)
-        let old = Date().addingTimeInterval(-20 * 86400)
-        try write(QuotaBridgeFile(sessionId: "old", observedAt: Clock.ms(old), capturedAt: Clock.ms(old), fingerprint: "f",
-                                  rateLimits: ["five_hour": .init(usedPercentage: 1, resetsAt: nil)]), name: "statusline-old.json", in: dir)
-        XCTAssertTrue(StatusLineQuotaSource.observations(in: dir).isEmpty)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("statusline-old.json").path))
-    }
-
+final class DesktopCacheSourceTests: XCTestCase {
     func testDesktopCacheIsAlwaysUnverifiedAndHasNoResetTime() throws {
         let env = try TestEnv()
         let url = env.root.appendingPathComponent("plan-usage-history.json")
@@ -200,117 +168,20 @@ final class StatusLineSourceTests: XCTestCase {
     }
 }
 
-/// Runs the real `tw-statusline` helper binary.
-final class BridgeBinaryTests: XCTestCase {
-    private var helper: URL {
-        Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("tw-statusline")
-    }
-
-    private func run(_ input: String, quotaDir: URL, arguments: [String] = []) throws -> (stdout: String, status: Int32) {
-        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: helper.path), "helper binary not built")
-        let p = Process()
-        p.executableURL = helper
-        p.arguments = arguments
-        p.environment = ["TOKENWATCH_QUOTA_DIR": quotaDir.path, "PATH": "/usr/bin:/bin"]
-        let stdin = Pipe(), stdout = Pipe()
-        p.standardInput = stdin
-        p.standardOutput = stdout
-        try p.run()
-        stdin.fileHandleForWriting.write(Data(input.utf8))
-        try stdin.fileHandleForWriting.close()
-        let out = stdout.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        return (String(decoding: out, as: UTF8.self), p.terminationStatus)
-    }
-
-    private func statusJSON(session: String = "sess-1", five: Double = 23.5, apiMs: Int = 4000) -> String {
-        #"{"session_id":"\#(session)","model":{"id":"claude-opus-5-5"},"cwd":"/Users/test/secret-project","transcript_path":"/Users/test/.claude/x.jsonl","cost":{"total_cost_usd":1.5,"total_api_duration_ms":\#(apiMs)},"rate_limits":{"five_hour":{"used_percentage":\#(five),"resets_at":1893456000},"seven_day":{"used_percentage":41.2,"resets_at":1893999999}}}"#
-    }
-
-    func testWritesOnlyTheRateLimitsAndPrintsASummary() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        let (out, status) = try run(statusJSON(), quotaDir: dir)
-        XCTAssertEqual(status, 0)
-        XCTAssertEqual(out.trimmingCharacters(in: .whitespacesAndNewlines), "5h 24% · 7d 41%")
-        let text = try String(contentsOf: dir.appendingPathComponent("statusline-sess-1.json"), encoding: .utf8)
-        XCTAssertFalse(text.contains("secret-project"), "the working directory is never stored")
-        XCTAssertFalse(text.contains("transcript"), "the transcript path is never stored")
-        XCTAssertFalse(text.contains("claude-opus"), "the model is not stored")
-        // The helper dates the reading with the real current time, so the reading is evaluated at the current time too.
-        let readings = StatusLineQuotaSource.observations(in: dir, now: Date())
-        XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.utilizationPercent, 23.5)
-        XCTAssertEqual(readings.first { $0.windowKey == "300m" }?.resetsAt, Date(timeIntervalSince1970: 1_893_456_000))
-        // Files are private to the user.
-        let attrs = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("statusline-sess-1.json").path)
-        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
-    }
-
-    func testRerenderWithoutNewApiActivityKeepsTheOriginalObservationTime() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        _ = try run(statusJSON(), quotaDir: dir)
-        let file = dir.appendingPathComponent("statusline-sess-1.json")
-        let first = try JSONDecoder().decode(QuotaBridgeFile.self, from: Data(contentsOf: file))
-        Thread.sleep(forTimeInterval: 0.05)
-        _ = try run(statusJSON(), quotaDir: dir)        // Identical: the status line merely re-rendered.
-        XCTAssertEqual(try JSONDecoder().decode(QuotaBridgeFile.self, from: Data(contentsOf: file)).observedAt, first.observedAt)
-        Thread.sleep(forTimeInterval: 0.05)
-        _ = try run(statusJSON(apiMs: 9000), quotaDir: dir)    // The session made another API call.
-        XCTAssertGreaterThan(try JSONDecoder().decode(QuotaBridgeFile.self, from: Data(contentsOf: file)).observedAt, first.observedAt)
-    }
-
-    func testNoRateLimitsMeansNothingIsWritten() throws {
-        // API-key users and brand new sessions have no rate_limits object.
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        let (out, status) = try run(#"{"session_id":"s","model":{"id":"x"}}"#, quotaDir: dir)
-        XCTAssertEqual(status, 0)
-        XCTAssertEqual(out, "")
-        XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.isEmpty ?? true)
-    }
-
-    func testGarbageInputNeverFailsAndStillRunsTheChainedCommand() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        let (out, status) = try run("<<< not json >>>", quotaDir: dir, arguments: ["--chain", "echo my-own-statusline"])
-        XCTAssertEqual(status, 0)
-        XCTAssertEqual(out.trimmingCharacters(in: .whitespacesAndNewlines), "my-own-statusline")
-    }
-
-    func testChainedCommandReceivesTheOriginalInput() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        let (out, _) = try run(statusJSON(), quotaDir: dir, arguments: ["--chain", "cat"])
-        XCTAssertEqual(out, statusJSON(), "the user's own status line sees exactly what Claude Code sent")
-    }
-
-    func testSessionIdCannotEscapeTheQuotaFolder() throws {
-        let env = try TestEnv()
-        let dir = env.root.appendingPathComponent("quota")
-        _ = try run(statusJSON(session: "../../evil"), quotaDir: dir)
-        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
-        XCTAssertTrue(names.allSatisfy { !$0.contains("/") && $0.hasPrefix("statusline-") })
-        XCTAssertFalse(FileManager.default.fileExists(atPath: env.root.appendingPathComponent("evil.json").path))
-    }
-}
-
+/// Drives the quota coordinator end to end against Claude Code's cache file and the opt-in Desktop hint.
 final class QuotaCoordinatorTests: XCTestCase {
     private func makeCoordinator(_ env: TestEnv, clock: @escaping @Sendable () -> Date = { Date() },
                                  hint: Bool = false) -> (QuotaCoordinator, URL, URL) {
-        let dir = env.root.appendingPathComponent("quota")
+        let cache = env.root.appendingPathComponent("claude/.claude.json")
         let desktop = env.root.appendingPathComponent("plan-usage-history.json")
         let settings = SettingsStore(db: env.db)
         settings.update { $0.showUnverifiedQuota = hint }
-        return (QuotaCoordinator(db: env.db, settings: settings, feeds: .claude(bridgeDirectory: dir, desktopCache: desktop, cache: env.root.appendingPathComponent("none-cache.json")), clock: clock), dir, desktop)
+        return (QuotaCoordinator(db: env.db, settings: settings, feeds: .claude(desktopCache: desktop, cache: cache), clock: clock), cache, desktop)
     }
 
-    private func writeBridge(_ dir: URL, session: String = "s1", five: Double, observed: Date, resets: Date) throws {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = QuotaBridgeFile(sessionId: session, observedAt: Clock.ms(observed), capturedAt: Clock.ms(observed), fingerprint: "\(five)",
-                                   rateLimits: ["five_hour": .init(usedPercentage: five, resetsAt: resets.timeIntervalSince1970),
-                                                "seven_day": .init(usedPercentage: 81, resetsAt: resets.timeIntervalSince1970 + 86400)])
-        try JSONEncoder().encode(file).write(to: dir.appendingPathComponent("statusline-\(session).json"))
+    private func writeCache(_ url: URL, five: Double, observed: Date, resets: Date) throws {
+        try ClaudeCacheFixture.write(to: url, fetchedAt: observed, five: five, week: 81, fiveReset: resets,
+                                     weekReset: resets.addingTimeInterval(86400))
     }
 
     func testStatesStartUnavailableAndTokenVolumeNeverCreatesAPercentage() async throws {
@@ -330,15 +201,18 @@ final class QuotaCoordinatorTests: XCTestCase {
         await coordinator.stop()
     }
 
-    func testBridgeFileUpdatesStateAndIsRecordedOnceInHistory() async throws {
+    func testCacheSnapshotUpdatesStateAndIsRecordedOnceInHistory() async throws {
         let env = try TestEnv()
-        let (coordinator, dir, _) = makeCoordinator(env)
+        let (coordinator, cache, _) = makeCoordinator(env)
+        // The cache already exists when Tokenwatch starts. A file that appears later is only noticed by the slow
+        // safety refresh, so the file event is exercised by rewriting an existing file.
+        let now = Date()
+        try writeCache(cache, five: 50, observed: now.addingTimeInterval(-120), resets: now.addingTimeInterval(7200))
         await coordinator.start()
         let stream = await coordinator.changes()
         var iterator = stream.makeAsyncIterator()
 
-        let now = Date()
-        try writeBridge(dir, five: 63, observed: now, resets: now.addingTimeInterval(7200))
+        try writeCache(cache, five: 63, observed: now, resets: now.addingTimeInterval(7200))
         // Wait for the file event to reach the coordinator.
         _ = await iterator.next()
         var state = await coordinator.window("300m")!
@@ -353,13 +227,13 @@ final class QuotaCoordinatorTests: XCTestCase {
         await coordinator.refresh(force: true)
         await coordinator.refresh(force: true)
         let rows = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot q JOIN quota_window w ON w.id = q.window_id WHERE w.window_key = '300m'") }
-        XCTAssertEqual(rows, 1)
+        XCTAssertEqual(rows, 2, "the initial snapshot and the new one, and nothing for the repeated refreshes")
 
         // A genuinely new value is appended.
-        try writeBridge(dir, five: 70, observed: now.addingTimeInterval(60), resets: now.addingTimeInterval(7200))
+        try writeCache(cache, five: 70, observed: now.addingTimeInterval(60), resets: now.addingTimeInterval(7200))
         await coordinator.refresh(force: true)
         let after = try env.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot q JOIN quota_window w ON w.id = q.window_id WHERE w.window_key = '300m'") }
-        XCTAssertEqual(after, 2)
+        XCTAssertEqual(after, 3)
         await coordinator.stop()
     }
 
@@ -368,9 +242,9 @@ final class QuotaCoordinatorTests: XCTestCase {
         let env = try TestEnv()
         try Fixture.write([Fixture.assistant(id: "tiny", session: "S", at: t0, input: 1, output: 1)], to: try env.mainFile(session: "S"))
         try env.syncAll()
-        let (coordinator, dir, _) = makeCoordinator(env)
+        let (coordinator, cache, _) = makeCoordinator(env)
         let now = Date()
-        try writeBridge(dir, five: 90, observed: now, resets: now.addingTimeInterval(3600))
+        try writeCache(cache, five: 90, observed: now, resets: now.addingTimeInterval(3600))
         await coordinator.start()
         try await Task.sleep(for: .milliseconds(300))
         let s = await coordinator.window("300m")!
@@ -383,19 +257,19 @@ final class QuotaCoordinatorTests: XCTestCase {
         let env = try TestEnv()
         let base = Date()
         let box = ClockBox(base)
-        let (coordinator, dir, _) = makeCoordinator(env, clock: { box.now })
-        try writeBridge(dir, five: 55, observed: base, resets: base.addingTimeInterval(2 * 3600))
+        let (coordinator, cache, _) = makeCoordinator(env, clock: { box.now })
+        try writeCache(cache, five: 55, observed: base, resets: base.addingTimeInterval(6 * 3600))
         await coordinator.start()
         try await Task.sleep(for: .milliseconds(300))
         var s = await coordinator.window("300m")!
         XCTAssertEqual(s.freshness, .fresh)
 
-        box.now = base.addingTimeInterval(90 * 60)
+        box.now = base.addingTimeInterval(150 * 60)
         s = await coordinator.window("300m")!
         XCTAssertEqual(s.freshness, .stale)
         XCTAssertEqual(s.utilizationPercent, 55)
 
-        box.now = base.addingTimeInterval(3 * 3600)
+        box.now = base.addingTimeInterval(7 * 3600)
         s = await coordinator.window("300m")!
         if case .windowElapsed = s.availability {} else { XCTFail("expected an elapsed window, got \(s.availability)") }
         XCTAssertNil(s.utilizationPercent)
@@ -424,24 +298,6 @@ final class QuotaCoordinatorTests: XCTestCase {
         let history = try env2.db.read { try $0.scalarInt("SELECT count(*) FROM quota_snapshot") }
         XCTAssertEqual(history, 0, "unverified values are not recorded as quota history")
         await on.stop()
-    }
-
-    func testSpendLimitWindowAppearsWhenReported() async throws {
-        let env = try TestEnv()
-        let (coordinator, dir, _) = makeCoordinator(env)
-        let now = Date()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let f = QuotaBridgeFile(sessionId: "g", observedAt: Clock.ms(now), capturedAt: Clock.ms(now), fingerprint: "x",
-                                rateLimits: ["spend_limit": .init(usedPercentage: 62.8, resetsAt: now.timeIntervalSince1970 + 86400)])
-        try JSONEncoder().encode(f).write(to: dir.appendingPathComponent("statusline-g.json"))
-        await coordinator.start()
-        try await Task.sleep(for: .milliseconds(300))
-        let keys = await coordinator.states().filter { $0.pool.key.provider == .anthropic }.map(\.windowKey)
-        XCTAssertEqual(Set(keys), ["300m", "10080m", "spend_limit"])
-        let spend = await coordinator.window("spend_limit")!
-        XCTAssertNil(spend.windowMinutes, "a spend limit has no fixed length")
-        XCTAssertEqual(spend.utilizationPercent, 62.8)
-        await coordinator.stop()
     }
 }
 

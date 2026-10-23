@@ -4,7 +4,7 @@ import Foundation
 /// window's state changes.
 ///
 /// Quota figures reach the database in two ways. A `QuotaFeed` supplies observations that this coordinator reads and
-/// stores (Claude Code's status line helper is one). A session-log adapter can instead emit its provider's snapshots
+/// stores (Claude Code's local usage cache is one). A session-log adapter can instead emit its provider's snapshots
 /// together with the usage it reads (the OpenAI adapter does). Either way the state shown to the user is evaluated
 /// from the stored snapshots, so every provider is handled by the same code.
 ///
@@ -37,8 +37,8 @@ public actor QuotaCoordinator {
     private var lastRefreshAttempt = Date.distantPast
     private var trailingRefresh: Task<Void, Never>?
 
-    /// Refreshes closer together than this are coalesced, which keeps a burst of file events (one per
-    /// status line render) from causing a burst of reads.
+    /// Refreshes closer together than this are coalesced, which keeps a burst of file events (Claude Code
+    /// rewrites its state file often) from causing a burst of reads.
     private let minimumRefreshGap: TimeInterval = 1.0
 
     public init(db: UsageDatabase, settings: SettingsStore, feeds: [any QuotaFeed],
@@ -226,7 +226,7 @@ public actor QuotaCoordinator {
 
     /// Stores the authoritative readings that differ from what was stored before. The store collapses
     /// identical values into one snapshot whose confirmation time moves forward, so the history stays small
-    /// however often the status line renders. Unverified readings are never stored.
+    /// however often a source is rewritten. Unverified readings are never stored.
     private func persistChanges(_ observations: [QuotaObservation]) {
         var toWrite: [(key: String, observation: QuotaObservation)] = []
         for o in observations where o.authority == .authoritative {

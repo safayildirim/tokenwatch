@@ -47,21 +47,9 @@ final class ClaudeCodeCacheCoordinatorTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    private func writeStatusLine(_ directory: URL, five: Double, week: Double, observed: Date, reset: Date,
-                                 weekReset: Date? = nil) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = QuotaBridgeFile(sessionId: "s1", observedAt: Clock.ms(observed), capturedAt: Clock.ms(observed),
-                                   fingerprint: "\(five)-\(observed.timeIntervalSince1970)",
-                                   rateLimits: ["five_hour": .init(usedPercentage: five, resetsAt: reset.timeIntervalSince1970),
-                                                "seven_day": .init(usedPercentage: week, resetsAt: (weekReset ?? reset.addingTimeInterval(86_400)).timeIntervalSince1970)])
-        try JSONEncoder().encode(file).write(to: directory.appendingPathComponent("statusline-s1.json"))
-    }
-
-    private func coordinator(_ env: TestEnv, cache: URL, bridge: URL? = nil, now: Date? = nil) -> QuotaCoordinator {
-        var feeds: [any QuotaFeed] = [ClaudeCodeCacheFeed(url: cache)]
-        if let bridge { feeds.append(ClaudeStatusLineFeed(directory: bridge)) }
+    private func coordinator(_ env: TestEnv, cache: URL, now: Date? = nil) -> QuotaCoordinator {
         let at = now ?? self.now
-        return QuotaCoordinator(db: env.db, settings: SettingsStore(db: env.db), feeds: feeds, clock: { at })
+        return QuotaCoordinator(db: env.db, settings: SettingsStore(db: env.db), feeds: [ClaudeCodeCacheFeed(url: cache)], clock: { at })
     }
 
     private func snapshotCount(_ env: TestEnv) throws -> Int {
@@ -90,7 +78,7 @@ final class ClaudeCodeCacheCoordinatorTests: XCTestCase {
         await coordinator.states().filter { $0.pool.key.accountID == accountID }
     }
 
-    func testCacheIsIngestedWithoutTheStatusLineAndSurvivesARestart() async throws {
+    func testCacheIsIngestedAndSurvivesARestart() async throws {
         let env = try TestEnv()
         let cache = env.root.appendingPathComponent("claude/.claude.json")
         let fetched = now.addingTimeInterval(-3 * 3_600)
@@ -186,53 +174,6 @@ final class ClaudeCodeCacheCoordinatorTests: XCTestCase {
         await restarted.stop()
     }
 
-    func testCacheAndStatusLineReadingsStayInSeparatePoolsAndAreNotReconciled() async throws {
-        let env = try TestEnv()
-        let cache = env.root.appendingPathComponent("claude/.claude.json")
-        let bridge = env.root.appendingPathComponent("quota")
-        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-5 * 60),
-                                            five: 40, week: 50, reset: reset, fiveReset: reset))
-        try writeStatusLine(bridge, five: 60, week: 80, observed: now.addingTimeInterval(-4 * 60), reset: reset)
-        let c = coordinator(env, cache: cache, bridge: bridge)
-        await c.refresh(force: true)
-        let cacheID = try cacheAccountID(env, accountA)
-        let statusID = try accountID(env, hash: nil)
-        let cacheState = try await windowState(c, "300m", accountID: cacheID)
-        let statusState = try await windowState(c, "300m", accountID: statusID)
-        XCTAssertEqual(cacheState.utilizationPercent, 40)
-        XCTAssertEqual(cacheState.reading?.source, .claudeCodeCache)
-        XCTAssertNil(cacheState.sourceConflict, "the status line has no account identity, so it is not a conflict for this account")
-        XCTAssertEqual(statusState.utilizationPercent, 60)
-        XCTAssertEqual(statusState.reading?.source, .claudeStatusLine)
-        XCTAssertNil(statusState.sourceConflict)
-        XCTAssertEqual(try snapshotCount(env), 4, "two identified windows and two unassigned windows, never a combined percentage")
-        await c.stop()
-    }
-
-    func testIdenticalCacheAndStatusLineValuesAreNotCollapsedAcrossAccountPools() async throws {
-        let env = try TestEnv()
-        let cache = env.root.appendingPathComponent("claude/.claude.json")
-        let bridge = env.root.appendingPathComponent("quota")
-        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-5 * 60),
-                                            five: 50, week: 50, reset: reset, fiveReset: reset))
-        let c = coordinator(env, cache: cache, bridge: bridge)
-        await c.refresh(force: true)
-        try writeStatusLine(bridge, five: 50, week: 50, observed: now.addingTimeInterval(-60), reset: reset, weekReset: reset)
-        await c.refresh(force: true)
-        let cacheID = try cacheAccountID(env, accountA)
-        let statusID = try accountID(env, hash: nil)
-        let cacheState = try await windowState(c, "300m", accountID: cacheID)
-        let statusState = try await windowState(c, "300m", accountID: statusID)
-        XCTAssertEqual(cacheState.reading?.source, .claudeCodeCache)
-        XCTAssertEqual(statusState.reading?.source, .claudeStatusLine)
-        XCTAssertEqual(try snapshotCount(env), 4, "identical numbers from different identity states stay separate")
-        let sources = try env.db.read { c in
-            try c.query("SELECT telemetry_source_id FROM quota_snapshot") { $0.text(0) }
-        }
-        XCTAssertEqual(Set(sources), [TelemetrySourceID.claudeStatusLine.rawValue, TelemetrySourceID.claudeCodeCache.rawValue])
-        await c.stop()
-    }
-
     func testAtomicReplacementOfTheCacheArmsAgainAndUpdatesTheState() async throws {
         let env = try TestEnv()
         let cache = env.root.appendingPathComponent("claude/.claude.json")
@@ -275,47 +216,6 @@ final class ClaudeCodeCacheCoordinatorTests: XCTestCase {
         await c.stop()
     }
 
-
-    func testANewerLowerStatusLineReadingDoesNotReplaceAnIdentifiedCacheReading() async throws {
-        let env = try TestEnv()
-        let cache = env.root.appendingPathComponent("claude/.claude.json")
-        let bridge = env.root.appendingPathComponent("quota")
-        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-10 * 60),
-                                            five: 80, week: 80, reset: reset, fiveReset: reset))
-        try writeStatusLine(bridge, five: 60, week: 60, observed: now.addingTimeInterval(-2 * 60), reset: reset, weekReset: reset)
-        let c = coordinator(env, cache: cache, bridge: bridge)
-        await c.refresh(force: true)
-        let cacheID = try cacheAccountID(env, accountA)
-        let statusID = try accountID(env, hash: nil)
-        let cacheState = try await windowState(c, "300m", accountID: cacheID)
-        let statusState = try await windowState(c, "300m", accountID: statusID)
-        XCTAssertEqual(cacheState.utilizationPercent, 80, "a newer unattributed reading cannot replace an identified account's reading")
-        XCTAssertEqual(statusState.utilizationPercent, 60, "the status line still keeps its own unassigned observation")
-        XCTAssertNil(cacheState.sourceConflict)
-        XCTAssertNil(statusState.sourceConflict)
-        await c.stop()
-    }
-
-    func testStatusLineDoesNotBorrowTheCachedAccountIdentityEvenAtTheSameInstant() async throws {
-        let env = try TestEnv()
-        let cache = env.root.appendingPathComponent("claude/.claude.json")
-        let bridge = env.root.appendingPathComponent("quota")
-        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-5 * 60),
-                                            five: 80, week: 80, reset: reset, fiveReset: reset))
-        try writeStatusLine(bridge, five: 60, week: 60, observed: now.addingTimeInterval(-5 * 60), reset: reset, weekReset: reset)
-        let c = coordinator(env, cache: cache, bridge: bridge)
-        await c.refresh(force: true)
-        let cacheID = try cacheAccountID(env, accountA)
-        let statusID = try accountID(env, hash: nil)
-        let cacheState = try await windowState(c, "300m", accountID: cacheID)
-        let statusState = try await windowState(c, "300m", accountID: statusID)
-        XCTAssertEqual(cacheState.utilizationPercent, 80)
-        XCTAssertEqual(cacheState.reading?.source, .claudeCodeCache)
-        XCTAssertEqual(statusState.utilizationPercent, 60)
-        XCTAssertEqual(statusState.reading?.source, .claudeStatusLine)
-        XCTAssertTrue(statusState.pool.accountLabel == "Unassigned")
-        await c.stop()
-    }
 
     func testAStaleCacheStillShowsItsLastKnownValueAndSource() async throws {
         let env = try TestEnv()
@@ -454,4 +354,45 @@ final class ClaudeCodeCacheCoordinatorTests: XCTestCase {
         XCTAssertNil(try lastConfirmed(env, "300m").flatMap { $0 > Clock.ms(now) ? $0 : nil }, "a future-dated fetch is not stored")
         await ahead.stop()
     }
+
+    func testRepeatedCacheWritesRaiseEachAlertOnlyOnce() async throws {
+        let env = try TestEnv()
+        let cache = env.root.appendingPathComponent("claude/.claude.json")
+        var notifications = NotificationSettings()
+        notifications.enabled = true
+        let engine = AlertEngine(db: env.db)
+        func alerts(_ c: QuotaCoordinator, engine: AlertEngine) async -> [QuotaAlertSummary] {
+            let states = await c.states()
+            return engine.evaluate(states: states, sources: [], activeProviders: [.anthropic], settings: notifications, now: now)
+                .map { QuotaAlertSummary(key: $0.key) }
+        }
+
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-300), five: 80, week: nil, reset: reset, fiveReset: reset))
+        let c = coordinator(env, cache: cache)
+        await c.refresh(force: true)
+        let first = await alerts(c, engine: engine)
+        XCTAssertEqual(first.count, 1, "crossing a threshold is announced")
+
+        // The same snapshot written again, and the same percentage fetched again later, are not new events.
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-300), five: 80, week: nil, reset: reset, fiveReset: reset))
+        await c.refresh(force: true)
+        let rewritten = await alerts(c, engine: engine)
+        XCTAssertEqual(rewritten, [])
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-60), five: 80, week: nil, reset: reset, fiveReset: reset))
+        await c.refresh(force: true)
+        let refetched = await alerts(c, engine: engine)
+        XCTAssertEqual(refetched, [])
+        await c.stop()
+
+        // A restart restores both the readings and the record of what was already announced.
+        let restarted = coordinator(env, cache: cache)
+        await restarted.refresh(force: true)
+        let afterRestart = await alerts(restarted, engine: AlertEngine(db: env.db))
+        XCTAssertEqual(afterRestart, [])
+        await restarted.stop()
+    }
+}
+
+private struct QuotaAlertSummary: Equatable {
+    var key: String
 }

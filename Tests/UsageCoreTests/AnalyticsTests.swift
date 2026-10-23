@@ -289,7 +289,7 @@ final class AnalyticsQueryTests: XCTestCase {
                 try QuotaStore.record(QuotaObservation(provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
                                                        windowKey: "300m", windowMinutes: 300, utilizationPercent: pct,
                                                        resetsAt: Clock.date(ms: windowEnd), observedAt: Clock.date(ms: at),
-                                                       source: .claudeStatusLine),
+                                                       source: .claudeCodeCache),
                                       originSessionID: nil, resolver: resolver)
             }
         }

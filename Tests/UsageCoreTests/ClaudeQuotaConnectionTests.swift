@@ -45,22 +45,6 @@ final class ClaudeQuotaConnectionTests: XCTestCase {
                        .localCache(observedAt: r.observedAt, freshness: .fresh))
     }
 
-    func testTheNewestStatusLineReadingIsNamedOverTheCache() {
-        let cache = reading(50, source: .claudeCodeCache, age: 10 * 60)
-        let line = reading(60, source: .claudeStatusLine, age: 60)
-        XCTAssertEqual(ClaudeQuotaConnection.evaluate(pools: [pool([window("300m", 300, cache), window("10080m", 10080, line)])],
-                                                      feeds: [feed(.claudeCodeCache), feed(.claudeStatusLine)]),
-                       .statusLine(observedAt: line.observedAt, freshness: .fresh))
-    }
-
-    func testATieInObservationTimePrefersTheDocumentedStatusLine() {
-        let cache = reading(50, source: .claudeCodeCache, age: 60)
-        let line = reading(60, source: .claudeStatusLine, age: 60)
-        XCTAssertEqual(ClaudeQuotaConnection.evaluate(pools: [pool([window("300m", 300, cache), window("10080m", 10080, line)])],
-                                                      feeds: [feed(.claudeCodeCache), feed(.claudeStatusLine)]),
-                       .statusLine(observedAt: line.observedAt, freshness: .fresh))
-    }
-
     func testAnOldReadingIsStaleInsteadOfBeingPresentedAsCurrent() {
         let old = reading(99, source: .claudeCodeCache, age: 4 * 3_600)
         XCTAssertEqual(ClaudeQuotaConnection.evaluate(pools: [pool([window("10080m", 10080, old, freshness: .stale)])],
@@ -91,11 +75,11 @@ final class ClaudeQuotaConnectionTests: XCTestCase {
     func testAScopedWindowDoesNotDecideWhichSourceTheWholeSubscriptionUses() {
         let shared = reading(50, source: .claudeCodeCache, age: 20 * 60)
         let scoped = QuotaReading(utilizationPercent: 10, resetsAt: now.addingTimeInterval(3_600),
-                                  observedAt: now.addingTimeInterval(-60), source: .claudeStatusLine, authority: .authoritative)
+                                  observedAt: now.addingTimeInterval(-60), source: .claudeCodeCache, authority: .authoritative)
         let scopedKey = WindowNaming.scopedKey(minutes: 10080, identity: "name:fable", label: "Fable")
         XCTAssertEqual(ClaudeQuotaConnection.evaluate(pools: [pool([window("10080m", 10080, shared),
                                                                     window(scopedKey, 10080, scoped)])],
-                                                      feeds: [feed(.claudeCodeCache), feed(.claudeStatusLine)]),
+                                                      feeds: [feed(.claudeCodeCache)]),
                        .localCache(observedAt: shared.observedAt, freshness: .fresh))
     }
 

@@ -23,7 +23,6 @@ final class ArchitectureIsolationTests: XCTestCase {
         "Ingest/SessionRegistryMonitor.swift",
         "Quota/QuotaSources.swift",
         "Quota/ClaudeCodeCacheSource.swift",
-        "Quota/StatusLineInstaller.swift",
     ]
 
     private let providerWords = try! NSRegularExpression(pattern: "claude|anthropic|codex|openai|chatgpt|gemini|gpt-", options: .caseInsensitive)
@@ -63,7 +62,7 @@ final class ArchitectureIsolationTests: XCTestCase {
 
     func testTheSharedCoreNeverReachesForAProvidersAdapter() throws {
         // The collector, writer, analytics and quota code work through protocols. They must not name an adapter type.
-        let adapters = ["ClaudeCodeAdapter", "CodexAdapter", "ClaudeCodeLineParser", "CodexLineParser", "StatusLineQuotaSource", "StatusLineInstaller"]
+        let adapters = ["ClaudeCodeAdapter", "CodexAdapter", "ClaudeCodeLineParser", "CodexLineParser"]
         for file in ["Ingest/UsageCollector.swift", "Ingest/FileSynchronizer.swift", "Storage/IngestWriter.swift", "Storage/EntityStore.swift",
                      "Analytics/AnalyticsEngine.swift", "Quota/QuotaCoordinator.swift", "Alerts/AlertEngine.swift", "Export/ExportService.swift"] {
             let all = try code(file).map(\.text).joined(separator: "\n")

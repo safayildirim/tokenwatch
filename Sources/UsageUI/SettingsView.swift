@@ -122,7 +122,7 @@ private struct QuotaSettings: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                QuotaSetupCard()
+                ClaudeQuotaSourceCard()
                 Card("Refresh") {
                     Stepper("Re-read quota files at least every \(model.settings.quotaRefreshSeconds) seconds",
                             value: Binding(get: { model.settings.quotaRefreshSeconds }, set: { v in model.updateSettings { $0.quotaRefreshSeconds = v } }),

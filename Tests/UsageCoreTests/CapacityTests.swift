@@ -235,7 +235,7 @@ final class CapacityStorageTests: XCTestCase {
                 provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
                 windowKey: "300m", windowMinutes: 300, utilizationPercent: 0,
                 resetsAt: start.addingTimeInterval(5 * 3600), observedAt: start,
-                source: .claudeStatusLine, authority: .authoritative), originSessionID: nil, resolver: resolver)
+                source: .claudeCodeCache, authority: .authoritative), originSessionID: nil, resolver: resolver)
         }
         let measurement = try CapacityMeasurementStore.begin(
             env.db, provider: .anthropic, accountID: accountID, poolKey: "claude-subscription",
@@ -408,7 +408,7 @@ final class CapacityQuotaAnalysisTests: XCTestCase {
                     provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
                     windowKey: window, windowMinutes: window == "300m" ? 300 : 10080,
                     utilizationPercent: percent, resetsAt: Clock.date(ms: resets),
-                    observedAt: Clock.date(ms: ms), source: .claudeStatusLine, authority: .authoritative),
+                    observedAt: Clock.date(ms: ms), source: .claudeCodeCache, authority: .authoritative),
                     originSessionID: nil, resolver: resolver)
             }
         }
@@ -435,7 +435,7 @@ final class CapacityQuotaAnalysisTests: XCTestCase {
                     provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
                     windowKey: "300m", windowMinutes: 300, utilizationPercent: percent,
                     resetsAt: Clock.date(ms: reset), observedAt: Clock.date(ms: base + offset * 60_000),
-                    source: .claudeStatusLine, authority: .authoritative), originSessionID: nil, resolver: resolver)
+                    source: .claudeCodeCache, authority: .authoritative), originSessionID: nil, resolver: resolver)
             }
         }
         try record(0, 0, reset: base + 3_600_000)
@@ -477,7 +477,7 @@ final class CapacityQuotaAnalysisTests: XCTestCase {
                     provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
                     windowKey: "300m", windowMinutes: 300, utilizationPercent: percent,
                     resetsAt: Clock.date(ms: reset), observedAt: Clock.date(ms: base + Int64(offset) * 60_000),
-                    source: .claudeStatusLine, authority: .authoritative), originSessionID: nil, resolver: resolver)
+                    source: .claudeCodeCache, authority: .authoritative), originSessionID: nil, resolver: resolver)
             }
         }
         let report = try CapacityAnalyticsEngine.report(
@@ -719,7 +719,7 @@ final class CapacityPerformanceTests: XCTestCase {
                         provider: .anthropic, account: .unassigned(.anthropic), poolKey: "claude-subscription",
                         windowKey: "300m", windowMinutes: 300, utilizationPercent: percent,
                         resetsAt: Clock.date(ms: start + 5 * 3_600_000),
-                        observedAt: Clock.date(ms: start + offset), source: .claudeStatusLine,
+                        observedAt: Clock.date(ms: start + offset), source: .claudeCodeCache,
                         authority: .authoritative), originSessionID: nil, resolver: resolver)
                 }
             }

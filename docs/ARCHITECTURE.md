@@ -13,7 +13,7 @@ The first version modelled Claude Code directly. Auditing it before adding OpenA
 | No account at all | One person can have two OpenAI accounts, and quota belongs to an account. | `account` table. The raw identifier is never stored, only a one-way hash. An explicit **unassigned** account exists per provider for activity that does not say whose it is, and it is never guessed. |
 | Tokens as four non-null integers (`input` excluded cache, `output`) | OpenAI's input *includes* cached tokens, reasoning tokens are a part of output, and some sources do not report some categories. A missing category stored as zero is a false statement. | **Canonical measurement**: `uncached_input`, `cache_read`, `cache_creation` and `reasoning_output` are nullable. Each provider's adapter normalizes into it and records the rule used (`normalization`) and how complete the figures are (`completeness`). Reasoning is stored as a subset of output and is never added to it. |
 | Quota windows were an enum (`five_hour`, `seven_day`, `spend_limit`), keyed by provider only | A different provider has different windows (a daily one, a monthly one, a plan with only a weekly window). Two accounts of one provider would collide. | **Quota pool** (per account) → **window** (identified by its length, such as `300m`) → **cycle** (one period between resets) → **snapshot**. Windows are dynamic. |
-| Quota percentages came from one hard-coded reader | The OpenAI percentages arrive inside session files, not from a helper. | Observations are stored through one path regardless of origin. Two entry points: a `QuotaFeed` (files a helper writes) or an adapter that emits snapshots with the usage it reads. |
+| Quota percentages came from one hard-coded reader | The OpenAI percentages arrive inside session files, not from a separate reader. | Observations are stored through one path regardless of origin. Two entry points: a `QuotaFeed` (a local provider file the coordinator reads and watches) or an adapter that emits snapshots with the usage it reads. |
 | Alerts were keyed by window kind and reset time | Two accounts, two pools or two products sharing a pool must not share or hide alerts. | Alert identity is **account, pool, window and cycle**. |
 | Prices were keyed by model only | The same model id can exist for two providers. | Rate cards are per provider and dated. Anthropic and OpenAI prices ship (see [TOKEN-ACCOUNTING](TOKEN-ACCOUNTING.md#openai-prices)). A model with no card stays unpriced. |
 | Menu bar modes were Claude-specific | Needs a per-provider choice. | `MenuBarDisplayMode.quota(provider)`, plus all providers, highest utilization, active sessions, icon only. |
@@ -28,7 +28,7 @@ The smallest refactor that makes these first-class was a **redesign of the singl
 | Provider | The company or platform that delivers the models | Anthropic, OpenAI |
 | Product | A product of a provider that produces usage | Claude Code, Codex, ChatGPT Work, ChatGPT Chat (not observable) |
 | Surface | Where a session ran | terminal, VS Code, JetBrains, Codex Desktop, ChatGPT Desktop |
-| Telemetry source | The mechanism through which data is collected | Claude transcripts, the Claude local usage cache, the optional Claude status line, Codex session files |
+| Telemetry source | The mechanism through which data is collected | Claude transcripts, the Claude local usage cache, Codex session files |
 | Account | An identity at a provider that owns an allowance | a hashed account, or the explicit "unassigned" |
 | Quota pool | An allowance enforced against an account, possibly shared by several products | Claude subscription; Codex and Work |
 | Quota window | One limit inside a pool, identified by its length or, for a model-scoped limit, by its length plus scope | `300m`, `10080m`, `scoped:10080:…` |
@@ -41,14 +41,13 @@ Quota pools are shared across products and per account: ChatGPT Work and Codex d
 
 ## 3. Anthropic source audit (Claude)
 
-Findings come from inspecting this machine's real Claude installation (792 session files, 4.7 GB), the Claude Code documentation (status line and monitoring pages), and Claude Desktop's local files. Nothing below is assumed: every "available" entry was observed in real data or is documented.
+Findings come from inspecting this machine's real Claude installation (792 session files, 4.7 GB), the Claude Code documentation (monitoring pages), and Claude Desktop's local files. Nothing below is assumed: every "available" entry was observed in real data or is documented.
 
 | Source | Session id | Project | Model | Per-request tokens | Cache read / write (5m / 1h) | Timestamps | Quota % | Quota reset time | Cost |
 |---|---|---|---|---|---|---|---|---|---|
 | **Claude Code transcripts** (`~/.claude/projects/**.jsonl`): terminal, VS Code extension, Claude Desktop "Code" tab | Yes | Yes (working directory, from the folder name and `cwd`) | Yes | **Yes**, on every assistant message | **Yes**, including the 5 m / 1 h split | Yes, per record | No | No | Only Claude Code's own per-session summary (`cost-state`), kept separate |
 | **Claude Code live process registry** (`~/.claude/sessions/*.json`) | Yes | Working directory | No | No | No | Start and update times | No | No | No |
 | **Claude Code local usage cache** (`~/.claude.json`, undocumented) | No | No | No | No | No | `cachedUsageUtilization.fetchedAtMs` | **Yes**: five-hour, weekly all-model and model-scoped windows | **Yes** | No |
-| **Claude Code status line input** (documented) | Yes | Yes | Yes | Context-window snapshot only, not per request | No | n/a | **Yes**: `rate_limits.five_hour` / `seven_day` / `spend_limit` `.used_percentage` | **Yes**: `.resets_at` | Session cost estimate |
 | **Claude Code OpenTelemetry** (documented) | Yes | Via attributes | Yes | Yes (`api_request` events) | Yes, in totals | Yes | **No** (not exposed) | No | `cost_usd` (an estimate) |
 | **Claude Desktop: Code sessions** (`~/Library/Application Support/Claude/claude-code-sessions`) | Yes (metadata) | Yes | Yes | No (the usage is in the transcripts above) | No | Yes | No | No | No |
 | **Claude Desktop: Chat and Cowork** | Not exposed | Not exposed | Not exposed | **Not exposed** | **Not exposed** | Not exposed | No documented interface | No | No |
@@ -59,7 +58,7 @@ Findings come from inspecting this machine's real Claude installation (792 sessi
 ### Conclusions drawn from the Claude audit
 
 1. **Token usage** is available completely and locally for everything that runs through Claude Code. The transcripts are the single richest source, and they are the only one that exposes the cache write lifetime split.
-2. **Subscription quota has one documented source and one provider-written local cache.** The documented source is the `rate_limits` object that Claude Code passes to a configured status line command; the application ships a tiny helper (`tw-statusline`) for it. Claude Code also keeps its last usage snapshot in `.claude.json`. That cache is undocumented and version-dependent, but it is read-only provider state, so it is the automatic baseline after strict validation. The two sources carry separate observation times and are reconciled, never averaged.
+2. **Subscription quota comes from one provider-written local cache.** Claude Code keeps its last usage snapshot in `.claude.json`. That cache is undocumented and version-dependent, but it is read-only provider state, so it is the automatic source after strict validation. It carries its own observation time, and Tokenwatch makes no network request and reads no credentials for it.
 3. **Quota is not derivable from tokens.** Anthropic does not document a conversion, and the account figure also includes usage the application cannot see. The application never computes a quota percentage from tokens. See [QUOTA.md](QUOTA.md).
 4. **OpenTelemetry** adds nothing that the transcripts do not already contain, but it needs a collector process to receive data. It is deliberately not implemented. The identity model (request keyed by the API message id, with the server `request_id` stored alongside) is compatible with it, so adding it later would not double count.
 5. **Claude Desktop Chat, Cowork, claude.ai and other devices cannot be monitored.** Their usage counts toward the account quota but leaves no local trace. This is shown in the interface and never hidden.
@@ -79,7 +78,7 @@ Findings come from this Mac's real data (232 Codex session files, 862 MB uncompr
 Conclusions:
 
 1. **Codex and Work are one engine.** The header's `originator` names the application (`codex_work_desktop`, `Codex Desktop`, `codex_exec`, `codex_vscode`, `JetBrains.*`), and that decides the product (Codex or ChatGPT Work) and the surface. Both products read from the same files and draw on one allowance, so they share one quota pool per account.
-2. **Quota is in the log.** Each response carries the account's `rate_limits`, so no helper needs installing. The figures are snapshots written when a response completes, so they are marked stale between responses.
+2. **Quota is in the log.** Each response carries the account's `rate_limits`, so nothing needs installing. The figures are snapshots written when a response completes, so they are marked stale between responses.
 3. **A window is identified by its length**, never by whether Codex calls it primary or secondary, because a plan may have only a weekly window.
 4. **ChatGPT Chat is not observable** and is shown as such, with its own pool that never receives a figure.
 5. **OpenAI prices are built in for the models whose prices OpenAI publishes** (read 2026-10-20). A model OpenAI does not list, such as `codex-auto-review`, is unpriced until the user adds a price (Settings → Cost → Add a price).
@@ -129,7 +128,6 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 | `UsageUI` | SwiftUI views and the observable `AppModel`. |
 | `Tokenwatch` | The `@main` app, shown to users as **Tokenwatch**. |
 | `tw` | Command line front end: import, verify, cost check, export, benchmark, for both providers. |
-| `tw-statusline` | Status line helper that Claude Code runs. |
 
 ## 6. Why these choices
 

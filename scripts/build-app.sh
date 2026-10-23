@@ -20,7 +20,6 @@ if [[ "${1:-}" == "--universal" ]]; then ARCH_FLAGS=(--arch arm64 --arch x86_64)
 echo "==> Compiling (release)"
 swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product Tokenwatch
 swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product tw
-swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --product tw-statusline
 BIN_DIR="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)"
 
 echo "==> Assembling $APP"
@@ -30,7 +29,6 @@ touch "$BUILD_DIR/.metadata_never_index"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/Tokenwatch" "$APP/Contents/MacOS/Tokenwatch"
-cp "$BIN_DIR/tw-statusline" "$APP/Contents/MacOS/tw-statusline"
 cp "$BIN_DIR/tw" "$APP/Contents/MacOS/tw"
 
 echo "==> Localizations"
@@ -70,7 +68,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 echo "==> Signing (ad hoc)"
-codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/tw-statusline"
 codesign --force --sign - --timestamp=none "$APP/Contents/MacOS/tw"
 codesign --force --sign - --timestamp=none --options runtime "$APP"
 codesign --verify --strict --verbose=1 "$APP" 2>&1 | tail -2

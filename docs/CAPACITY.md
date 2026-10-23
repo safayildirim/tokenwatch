@@ -13,7 +13,7 @@ evidence does not support a ratio.
 
 | Quantity | Source | Status |
 |---|---|---|
-| Quota utilization percentage | The provider's local cache, status line or session telemetry | **Observed** |
+| Quota utilization percentage | The provider's local cache or session telemetry | **Observed** |
 | Reset time / cycle identity | The provider's telemetry | **Observed** |
 | Local requests and token categories | Claude Code or Codex session files on this Mac | **Observed**, limited to this Mac |
 | API-equivalent list cost of local work | Built-in or user price cards | **Estimated** normalization proxy |
@@ -64,10 +64,9 @@ historical interpretation does not silently change.
 ## 3. Account identity
 
 Claude Code's local cache names the signed-in account, and the application stores its readings in
-that account, identified by a one-way hash. The Claude Code status line has no account identity, so
-its readings are stored in the explicit **unassigned** Anthropic account. The application never moves
-a reading between the two by reset time, session id, percentage, or which session happened to be
-nearby.
+that account, identified by a one-way hash. A reading from a source that names no account is stored
+in the explicit **unassigned** account of its provider. The application never moves a reading between
+accounts by reset time, session id, percentage, or which session happened to be nearby.
 
 For a pool, the report distinguishes:
 
@@ -83,11 +82,11 @@ The comparison is always within one stored account row. Provider-identified acco
 combined, even when their reset times look similar. Model-scoped weekly limits are kept separate in
 the quota views but are not used for plan-wide capacity ratios: their allowance is only a share of
 the weekly limit, so a plan's all-model multiplier does not apply to them. For Claude, the cache's readings are
-provider-identified and are compared within that account. Status-line readings carry no identity, so
-readings from more than one physical subscription can land in the same unassigned account. The app
+provider-identified and are compared within that account. Readings from a source that names no account share the unassigned account, so
+readings from more than one physical subscription can land there. The app
 keeps cycles with different reset times apart, but that is not proof of identity. A plan period applies
-to the account it was recorded for, so a plan recorded on the unassigned account does not cover the
-identified cache account, and the other way round.
+to the account it was recorded for, so a plan recorded on the unassigned account does not cover an
+identified account, and the other way round.
 
 ## 4. Building quota intervals
 
@@ -312,7 +311,7 @@ as still open; it is reviewed after it ends.
 * It does not verify that two subscriptions of one plan behave identically. The two-subscription
   strategy scales the measured single-subscription capacity by its count and is labelled as an
   assumption, not a second measurement.
-* It cannot separate two concurrently active Claude subscriptions in status-line readings, because
-  the status line names no account. Those readings share the unassigned Anthropic account; differing
-  reset times keep cycles apart but do not prove which subscription produced a reading. Cache
-  readings are separated by the account the cache names.
+* It cannot separate two concurrently active subscriptions in readings from a source that names no
+  account. Those readings share the unassigned account; differing reset times keep cycles apart but
+  do not prove which subscription produced a reading. Claude cache readings are separated by the
+  account the cache names.

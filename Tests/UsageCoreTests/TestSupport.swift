@@ -288,3 +288,28 @@ extension CodexFixture {
                     payload: "{\"type\":\"thread_settings_applied\",\"thread_settings\":{\"model\":\"\(model)\",\"service_tier\":\(tierJSON)}}")
     }
 }
+
+/// Writes the part of Claude Code's state file that holds a usage snapshot, in the layout the cache source reads.
+enum ClaudeCacheFixture {
+    static let account = "11111111-2222-4333-8444-555555555555"
+
+    private static func timestamp(_ date: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f.string(from: date)
+    }
+
+    /// Replaces the file at `url` the way Claude Code does, atomically and readable only by the user.
+    static func write(to url: URL, account: String = account, fetchedAt: Date, five: Double?, week: Double?,
+                      fiveReset: Date?, weekReset: Date?) throws {
+        var windows: [String] = []
+        if let five { windows.append("\"five_hour\":{\"utilization\":\(five),\"resets_at\":\(fiveReset.map { "\"\(timestamp($0))\"" } ?? "null")}") }
+        if let week { windows.append("\"seven_day\":{\"utilization\":\(week),\"resets_at\":\(weekReset.map { "\"\(timestamp($0))\"" } ?? "null")}") }
+        if windows.isEmpty { windows.append("\"five_hour\":null") }
+        let json = "{\"cachedUsageUtilization\":{\"accountUuid\":\"\(account)\",\"fetchedAtMs\":\(Clock.ms(fetchedAt)),\"utilization\":{\(windows.joined(separator: ","))}}}"
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+}

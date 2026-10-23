@@ -24,13 +24,13 @@ struct QuotaPage: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(provider.name, systemImage: provider.symbol).font(.title3.weight(.semibold))
                         ForEach(own) { pool in
-                            Card { QuotaPoolCard(pool: pool, onSetup: { model.selection = .quota }) }
+                            Card { QuotaPoolCard(pool: pool) }
                         }
                     }
                 }
             }
             if model.providers.contains(where: { $0.id == .anthropic }), scopeIncludesAnthropic {
-                QuotaSetupCard()
+                ClaudeQuotaSourceCard()
                 ClaudeQuotaDiagnosticsCard()
             }
             unobservableCard
@@ -127,30 +127,18 @@ struct QuotaPage: View {
     }
 }
 
-/// Explains the primary local-cache source, the optional status-line helper, and installs or removes the helper.
-struct QuotaSetupCard: View {
+/// Explains where Claude's quota figures come from and how the local cache is doing.
+struct ClaudeQuotaSourceCard: View {
     @Environment(AppModel.self) private var model
-    @State private var inspection = StatusLineInstaller.inspect()
-    @State private var message: String?
-    @State private var confirming = false
 
     var body: some View {
         Card(String(localized: "Claude quota tracking"),
-             subtitle: String(localized: "Tokenwatch reads the usage snapshot Claude Code already keeps on this Mac. Nothing is sent anywhere, and no credential or sign-in is used. The status line helper is optional.")) {
+             subtitle: String(localized: "Tokenwatch reads the usage snapshot Claude Code already keeps on this Mac. Nothing is sent anywhere, and no credential or sign-in is used.")) {
             VStack(alignment: .leading, spacing: 12) {
                 localCacheSection
-                Divider()
-                statusLineSection
-                Text("Subscription windows belong to the account that Claude Code is signed in to. A reading is a snapshot, not a live meter; Tokenwatch marks it stale when it is old and never invents a new window.")
+                Text("Subscription windows belong to the account that Claude Code is signed in to. A reading is a snapshot, not a live meter; Tokenwatch marks it stale when it is old and never invents a new window. Claude Code's cache is an internal file, not a stable interface, so its layout can change between versions.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
             }
-        }
-        .confirmationDialog("Add the optional status line helper to Claude Code?", isPresented: $confirming, titleVisibility: .visible) {
-            Button("Install") { run { try StatusLineInstaller.install() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This adds a statusLine entry to ~/.claude/settings.json. A backup of the file is saved next to it first, any existing status line keeps working, and nothing else in the file is changed. It is not required for the local cache. Takes effect in new Claude Code sessions.")
         }
     }
 
@@ -179,53 +167,9 @@ struct QuotaSetupCard: View {
         }
     }
 
-    private var statusLineSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: inspection.isInstalled ? "checkmark.circle.fill" : "circle.dashed")
-                    .foregroundStyle(inspection.isInstalled ? Palette.good : .secondary)
-                Text("Status line helper (optional)").font(.callout.weight(.medium))
-                Spacer()
-                Text(inspection.isInstalled ? String(localized: "Installed") : String(localized: "Not installed"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if inspection.isInstalled, let chained = inspection.chainedCommand {
-                Text("Your own status line is kept and still runs: \(chained)").font(.caption).foregroundStyle(.secondary)
-            }
-            if !inspection.isInstalled && inspection.command != nil {
-                Text("You already have a status line command. It will keep working: the helper runs it and shows its output.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if inspection.usesNonCommandStatusLine {
-                Text("Your settings define a status line that is not a command, so it was left alone. Set it up manually (see the README).")
-                    .font(.caption).foregroundStyle(Palette.warning)
-            }
-            if !inspection.settingsIsValidJSON {
-                Text("~/.claude/settings.json is not valid JSON, so it will not be modified.").font(.caption).foregroundStyle(Palette.critical)
-            }
-            let feed = model.quotaFeeds.first { $0.id == .claudeStatusLine }
-            feedText(feed).font(.caption).foregroundStyle(.secondary)
-            HStack {
-                if inspection.isInstalled {
-                    Button("Remove helper") { run { try StatusLineInstaller.uninstall() } }
-                } else {
-                    Button("Install helper…") { confirming = true }
-                        .disabled(StatusLineInstaller.locateBridge() == nil || !inspection.settingsIsValidJSON || inspection.usesNonCommandStatusLine)
-                }
-                Button("Reveal settings.json") { NSWorkspace.shared.activateFileViewerSelecting([QuotaPaths.claudeSettings]) }
-                Button("Check again") { inspection = StatusLineInstaller.inspect(); Task { await model.quota.refresh(force: true) } }
-            }
-            if StatusLineInstaller.locateBridge() == nil {
-                Text("The helper binary was not found next to this app, so it cannot be installed from here.")
-                    .font(.caption).foregroundStyle(Palette.warning)
-            }
-        }
-    }
-
     private var cacheIcon: String {
         switch model.claudeQuotaConnection {
         case .localCache: "checkmark.circle.fill"
-        case .statusLine: "checkmark.circle"
         case .stale: "clock.badge.exclamationmark"
         case .noData: model.claudeCodeCacheFeed?.sourceExists == true ? "clock" : "questionmark.circle"
         case .collectionError: "exclamationmark.triangle.fill"
@@ -235,7 +179,6 @@ struct QuotaSetupCard: View {
     private var cacheColor: Color {
         switch model.claudeQuotaConnection {
         case .localCache: Palette.good
-        case .statusLine: Palette.good
         case .stale: Palette.warning
         case .noData: .secondary
         case .collectionError: Palette.critical
@@ -248,39 +191,17 @@ struct QuotaSetupCard: View {
             Text(freshness == .fresh
                  ? "Reading subscription quota from the local cache. Claude Code fetched it \(Fmt.relative(at))."
                  : "Reading the last subscription snapshot from the local cache. Claude Code fetched it \(Fmt.relative(at)); it is ageing.")
-        case .statusLine(let at, _):
-            Text("Receiving subscription quota from the optional status line; newest observation \(Fmt.relative(at)). The local cache is also read.")
         case .stale(let source, let at):
             Text("The last subscription snapshot is from \(model.sourceName(source)) at \(Fmt.relative(at)). It is stale, so it is shown as last known rather than as current.")
         case .noData:
             if model.claudeCodeCacheFeed?.sourceExists == true {
                 Text("The local cache exists, but it has no subscription usage snapshot yet. Claude Code may add one after it fetches usage; API-key sessions do not report subscription windows.")
             } else {
-                Text("No Claude Code usage cache was found at the path above. It may appear after Claude Code fetches usage. The optional status line can also supply quota.")
+                Text("No Claude Code usage cache was found at the path above. It may appear after Claude Code fetches usage.")
             }
         case .collectionError(let issue):
             Text(issue.explanation)
         }
-    }
-
-    private func feedText(_ feed: QuotaFeedStatus?) -> Text {
-        let origins = feed?.originCount ?? 0
-        let newest = Fmt.relative(feed?.newestObservation)
-        if origins == 0 {
-            return Text("No status-line report received. The local cache is read independently, so this is not required.")
-        }
-        return origins == 1
-            ? Text("Receiving data from \(origins) Claude Code session; newest report \(newest).")
-            : Text("Receiving data from \(origins) Claude Code sessions; newest report \(newest).")
-    }
-
-    private func run(_ action: () throws -> Any?) {
-        do {
-            let result = try action()
-            if let url = result as? URL { message = String(localized: "Done. A backup was saved to \(url.lastPathComponent).") } else { message = String(localized: "Done.") }
-        } catch { message = "\(error)" }
-        inspection = StatusLineInstaller.inspect()
-        model.requestRefresh()
     }
 }
 
@@ -299,7 +220,6 @@ struct ClaudeQuotaDiagnosticsCard: View {
                     GridRow { Text("Freshness").foregroundStyle(.secondary); Text(freshness) }
                     GridRow { Text("Last successful cache read").foregroundStyle(.secondary); Text(Fmt.relative(model.claudeCodeCacheFeed?.lastSuccess)) }
                     GridRow { Text("Cache file").foregroundStyle(.secondary); Text(model.claudeCodeCacheFeed?.sourcePath ?? QuotaPaths.claudeCodeCache.path).textSelection(.enabled).lineLimit(1).truncationMode(.middle) }
-                    GridRow { Text("Status line").foregroundStyle(.secondary); Text(model.claudeHelperInstalled ? String(localized: "Installed (optional)") : String(localized: "Not installed (optional)")) }
                 }.font(.callout)
                 if let issue = model.claudeCodeCacheFeed?.issue {
                     Text(issue.explanation).font(.caption).foregroundStyle(Palette.warning)
@@ -335,7 +255,6 @@ struct ClaudeQuotaDiagnosticsCard: View {
     private var selectedSource: String {
         switch model.claudeQuotaConnection {
         case .localCache: model.sourceName(.claudeCodeCache)
-        case .statusLine: model.sourceName(.claudeStatusLine)
         case .stale(let source, _): model.sourceName(source)
         case .noData: String(localized: "None")
         case .collectionError: String(localized: "None (collection error)")
@@ -344,7 +263,7 @@ struct ClaudeQuotaDiagnosticsCard: View {
 
     private var observationTime: String {
         switch model.claudeQuotaConnection {
-        case .localCache(let at, _), .statusLine(let at, _): Fmt.relative(at)
+        case .localCache(let at, _): Fmt.relative(at)
         case .stale(_, let at): Fmt.relative(at)
         case .noData, .collectionError: "—"
         }
@@ -352,7 +271,7 @@ struct ClaudeQuotaDiagnosticsCard: View {
 
     private var freshness: String {
         switch model.claudeQuotaConnection {
-        case .localCache(_, let f), .statusLine(_, let f):
+        case .localCache(_, let f):
             switch f {
             case .fresh: String(localized: "Fresh")
             case .aging: String(localized: "Ageing")

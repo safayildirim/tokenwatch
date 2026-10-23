@@ -131,7 +131,7 @@ public struct MenuBarContentView: View {
                 // Older pools of the same provider (an account no longer in use) stay on the dashboard and out of the popover.
                 let reported = currentPools(pools)
                 ForEach(reported.isEmpty ? Array(pools.prefix(1)) : reported) { pool in
-                    QuotaPoolCard(pool: pool, compact: true, onSetup: openSettings)
+                    QuotaPoolCard(pool: pool, compact: true)
                 }
                 if pools.isEmpty { Text("No quota figure is available for \(provider.shortName).").font(.caption).foregroundStyle(.secondary) }
             }

@@ -1,6 +1,6 @@
 # Tokenwatch
 
-Tokenwatch is a native macOS menu bar app that monitors AI coding usage across providers, currently Claude Code and OpenAI's Codex engine, from the local files those tools write. It is a Swift package. `UsageCore` holds all collection, storage, accounting, quota and analytics logic with no UI dependency. `UsageUI` holds the SwiftUI views and the observable model behind them, and the menu bar app, the `tw` command line tool and the `tw-statusline` helper sit on top of both.
+Tokenwatch is a native macOS menu bar app that monitors AI coding usage across providers, currently Claude Code and OpenAI's Codex engine, from the local files those tools write. It is a Swift package. `UsageCore` holds all collection, storage, accounting, quota and analytics logic with no UI dependency. `UsageUI` holds the SwiftUI views and the observable model behind them, and the menu bar app and the `tw` command line tool sit on top of both.
 
 ## Non-negotiable invariants
 
@@ -19,7 +19,6 @@ These are architectural and product constraints. If a task conflicts with one, e
 - **Explainability:** Every stored request keeps its source and the normalization rule used to store it. Every derived number is labelled with what it measures, such as processed or fresh tokens, so a reader can see what produced it.
 - **Auditability:** Requests are immutable observations. Aggregation reads them and never edits them, and every figure can be traced back to the stored requests it came from.
 - **Database safety:** Never reset, recreate, or migrate the user's real usage database unless it is positively identified as a development or test database. Before the first release, a schema change may edit the existing migration in place, as `docs/SCHEMA.md` describes. After the first release, schema changes are appended as new migrations, and existing user data is preserved.
-- **Helper compatibility:** `tw-statusline` runs as Claude Code's status line command and deliberately does not depend on `UsageCore`, so its start-up cost stays minimal. Changes to its output or behavior must keep already-installed status line entries working.
 - **Price catalog:** Built-in prices are reinstalled when the catalog fingerprint changes, and user-defined price rows are never overwritten.
 
 Prefer the smallest correct change. Preserve domain boundaries and deterministic behavior. Do not refactor unrelated code or modify generated, vendor, or lock files unless required.
@@ -139,7 +138,7 @@ Use the cheapest verification that can falsify the change:
 
 On failure, inspect the smallest useful diagnostic excerpt before requesting more output.
 
-Before reporting completion, check the applicable invariants above, especially local-first privacy, quota provenance, idempotent ingest, domain ownership, database safety, helper compatibility, and price correctness.
+Before reporting completion, check the applicable invariants above, especially local-first privacy, quota provenance, idempotent ingest, domain ownership, database safety, and price correctness.
 
 State what passed, what failed, what was not run, and why. Never claim verification that did not occur.
 
@@ -196,7 +195,6 @@ High-value orientation only:
 - `Sources/UsageUI/`: SwiftUI views and the observable model behind them.
 - `Sources/Tokenwatch/`: the menu bar app entry point.
 - `Sources/tw/`: command line tool for headless imports, verification, and benchmarks.
-- `Sources/tw-statusline/`: the status line helper that Claude Code runs.
 - `Sources/CZstd/`: vendored Zstandard decompression; see its `README.md` for provenance.
 - `Tests/UsageCoreTests/` and `Tests/UsageUITests/`: test targets. `Fixtures/` holds recorded provider files.
 - `Package.swift`: targets and products.

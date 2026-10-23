@@ -89,8 +89,6 @@ public final class AppModel {
     public private(set) var quotaStates: [QuotaWindowState] = []
     public private(set) var quotaFeeds: [QuotaFeedStatus] = []
     public private(set) var activeByProvider: [ProviderID: Int] = [:]
-    /// Whether Claude Code's settings point at the status line helper that supplies its quota.
-    public private(set) var claudeHelperInstalled = false
     public private(set) var filterOptions = AnalyticsEngine.FilterOptions()
     /// Usage of each provider today and this week, for the menu bar popover.
     public private(set) var providerUsage: [ProviderPeriodUsage] = []
@@ -146,7 +144,7 @@ public final class AppModel {
     }
 
     public init(db: UsageDatabase, adapters: [any SourceAdapter]? = nil, quotaFeeds: [any QuotaFeed]? = nil,
-                bridgeDirectory: URL = QuotaPaths.bridgeDirectory, registryDirectory: URL? = nil,
+                registryDirectory: URL? = nil,
                 desktopCache: URL = QuotaPaths.desktopPlanUsageCache, claudeCache: URL = QuotaPaths.claudeCodeCache,
                 notificationSink: (any NotificationSink)? = nil) {
         self.db = db
@@ -161,7 +159,7 @@ public final class AppModel {
                                    isSourceEnabled: { !store.value.disabledSources.contains($0.rawValue) })
         liveness = registryDirectory.map { SessionRegistryMonitor(directory: $0, db: db) } ?? SessionRegistryMonitor(db: db)
         quota = QuotaCoordinator(db: db, settings: store,
-                                 feeds: quotaFeeds ?? .claude(bridgeDirectory: bridgeDirectory, desktopCache: desktopCache, cache: claudeCache))
+                                 feeds: quotaFeeds ?? .claude(desktopCache: desktopCache, cache: claudeCache))
         alerts = AlertEngine(db: db)
     }
 
@@ -417,7 +415,6 @@ public final class AppModel {
             lastError = "\(error)"
         }
         quotaFeeds = await quota.feedStatus()
-        claudeHelperInstalled = StatusLineInstaller.inspect().isInstalled
     }
 
     /// Called when a window becomes visible, so that it never shows numbers that were skipped while hidden.

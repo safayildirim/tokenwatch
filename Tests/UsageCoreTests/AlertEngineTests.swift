@@ -16,7 +16,7 @@ final class AlertEngineTests: XCTestCase {
         let resets = n.addingTimeInterval(resetsIn)
         // Each distinct reset time is its own cycle, like the database's cycles are.
         let reading = QuotaReading(utilizationPercent: pct, resetsAt: resets, observedAt: n.addingTimeInterval(-observedAgo),
-                                   source: .claudeStatusLine, authority: authority, cycleID: Int64(resets.timeIntervalSince1970 / 3600))
+                                   source: .claudeCodeCache, authority: authority, cycleID: Int64(resets.timeIntervalSince1970 / 3600))
         let info = QuotaPoolInfo(key: QuotaPoolKey(provider: provider, accountID: account, poolKey: pool),
                                  accountLabel: account == 1 ? "Unassigned" : "Account \(account)", name: pool == "codex" ? "Codex and Work" : "Claude subscription")
         return QuotaEvaluator.evaluate(pool: info, windowKey: WindowNaming.key(minutes: minutes), windowMinutes: minutes,
@@ -110,7 +110,7 @@ final class AlertEngineTests: XCTestCase {
         // After the window's end the evaluator reports an elapsed window.
         let after = now.addingTimeInterval(7200 + 60)
         let resets = now.addingTimeInterval(7200)
-        let reading = QuotaReading(utilizationPercent: 88, resetsAt: resets, observedAt: now, source: .claudeStatusLine,
+        let reading = QuotaReading(utilizationPercent: 88, resetsAt: resets, observedAt: now, source: .claudeCodeCache,
                                    authority: .authoritative, cycleID: Int64(resets.timeIntervalSince1970 / 3600))
         let pool = QuotaPoolInfo(key: QuotaPoolKey(provider: .anthropic, accountID: 1, poolKey: "claude-subscription"),
                                  accountLabel: "Unassigned", name: "Claude subscription")
@@ -124,7 +124,7 @@ final class AlertEngineTests: XCTestCase {
     func testStaleFeedWhileWorkingRaisesOneAlert() throws {
         let (e, _) = try engine()
         _ = e.evaluate(states: [state(pct: 20, observedAgo: 30)], sources: [], activeProviders: [.anthropic], settings: settings, now: now)
-        let stale = state(pct: 20, observedAgo: 2 * 3600)
+        let stale = state(pct: 20, observedAgo: 3 * 3600)
         let alerts = e.evaluate(states: [stale], sources: [], activeProviders: [.anthropic], settings: settings, now: now)
         XCTAssertEqual(alerts.filter { $0.kind == .staleData }.count, 1)
         XCTAssertTrue(e.evaluate(states: [stale], sources: [], activeProviders: [.anthropic], settings: settings, now: now).isEmpty)
@@ -201,125 +201,5 @@ final class AlertEngineTests: XCTestCase {
         health.consecutiveFailures = 5
         health.lastError = "The disk is full"
         XCTAssertEqual(e.evaluate(states: [], sources: [health], activeProviders: [], settings: settings, now: now).count, 1)
-    }
-}
-
-final class StatusLineInstallerTests: XCTestCase {
-    private let bridge = URL(fileURLWithPath: "/Applications/Tokenwatch.app/Contents/MacOS/tw-statusline")
-
-    private func settingsFile(_ env: TestEnv, _ contents: String?) throws -> URL {
-        let url = env.root.appendingPathComponent("claude/settings.json")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let contents { try contents.write(to: url, atomically: true, encoding: .utf8) }
-        return url
-    }
-
-    private func json(_ url: URL) throws -> [String: Any] {
-        try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
-    }
-
-    func testShellQuotingRoundTrips() {
-        for s in ["simple", "with space", "it's", "a'b'c", "$(rm -rf /)", "x; y", "\"q\""] {
-            XCTAssertEqual(ShellQuote.unquote(ShellQuote.quote(s)), s)
-        }
-        XCTAssertEqual(ShellQuote.quote("it's"), "'it'\\''s'")
-    }
-
-    func testInstallAddsTheStatusLineAndLeavesTheRestOfTheFileUntouched() throws {
-        let env = try TestEnv()
-        let original = """
-        {
-          "env": { "A": "1" },
-          "permissions": {
-            "allow": ["Bash(ls:*)"]
-          },
-          "model":   "opus"
-        }
-        """
-        let url = try settingsFile(env, original)
-        let backup = try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
-        let now = try json(url)
-        XCTAssertEqual((now["statusLine"] as? [String: Any])?["type"] as? String, "command")
-        let command = (now["statusLine"] as! [String: Any])["command"] as! String
-        XCTAssertTrue(command.contains("tw-statusline"))
-        XCTAssertFalse(command.contains("--chain"))
-        // Every other setting is preserved, including its original text.
-        let text = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertTrue(text.contains("\"model\":   \"opus\""), "formatting of untouched settings is preserved")
-        XCTAssertTrue(text.contains("\"allow\": [\"Bash(ls:*)\"]"))
-        XCTAssertEqual((now["env"] as? [String: String]), ["A": "1"])
-        XCTAssertEqual(try String(contentsOf: XCTUnwrap(backup), encoding: .utf8), original, "a backup of the original is made")
-        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
-    }
-
-    func testInstallChainsAnExistingStatusLineAndUninstallRestoresIt() throws {
-        let env = try TestEnv()
-        let url = try settingsFile(env, #"{"statusLine":{"type":"command","command":"~/bin/my line.sh --flag 'x'","padding":2},"other":true}"#)
-        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
-        var info = StatusLineInstaller.inspect(settingsURL: url)
-        XCTAssertTrue(info.isInstalled)
-        XCTAssertEqual(info.chainedCommand, "~/bin/my line.sh --flag 'x'")
-        XCTAssertEqual((try json(url)["statusLine"] as? [String: Any])?["padding"] as? Int, 2, "other statusLine options are kept")
-
-        // Installing again must not nest the chain.
-        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
-        info = StatusLineInstaller.inspect(settingsURL: url)
-        XCTAssertEqual(info.chainedCommand, "~/bin/my line.sh --flag 'x'")
-        XCTAssertEqual(((try json(url)["statusLine"] as! [String: Any])["command"] as! String).components(separatedBy: "--chain").count, 2)
-
-        try StatusLineInstaller.uninstall(settingsURL: url)
-        info = StatusLineInstaller.inspect(settingsURL: url)
-        XCTAssertFalse(info.isInstalled)
-        XCTAssertEqual(info.command, "~/bin/my line.sh --flag 'x'", "the user's own status line is back")
-        XCTAssertEqual(try json(url)["other"] as? Bool, true)
-    }
-
-    func testUninstallWithoutChainRemovesTheMemberCleanly() throws {
-        let env = try TestEnv()
-        let url = try settingsFile(env, "{\n  \"a\": 1,\n  \"b\": 2\n}\n")
-        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
-        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
-        try StatusLineInstaller.uninstall(settingsURL: url)
-        let after = try json(url)
-        XCTAssertNil(after["statusLine"])
-        XCTAssertEqual(after["a"] as? Int, 1)
-        XCTAssertEqual(after["b"] as? Int, 2)
-    }
-
-    func testInstallIntoMissingOrEmptyObjectWorks() throws {
-        let env = try TestEnv()
-        let missing = try settingsFile(env, nil)
-        XCTAssertNil(try StatusLineInstaller.install(settingsURL: missing, bridge: bridge))
-        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: missing).isInstalled)
-        let empty = env.root.appendingPathComponent("claude/empty.json")
-        try "{}".write(to: empty, atomically: true, encoding: .utf8)
-        try StatusLineInstaller.install(settingsURL: empty, bridge: bridge)
-        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: empty).isInstalled)
-    }
-
-    func testInvalidSettingsAreNeverModified() throws {
-        let env = try TestEnv()
-        let broken = "{ \"a\": 1, oops"
-        let url = try settingsFile(env, broken)
-        XCTAssertThrowsError(try StatusLineInstaller.install(settingsURL: url, bridge: bridge))
-        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), broken)
-        XCTAssertFalse(StatusLineInstaller.inspect(settingsURL: url).settingsIsValidJSON)
-    }
-
-    func testStatusLineKeyInsideAStringIsNotMistakenForTheRealOne() throws {
-        let env = try TestEnv()
-        let url = try settingsFile(env, #"{"note":"set \"statusLine\": here","x":{"statusLine":"nested"}}"#)
-        XCTAssertFalse(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
-        try StatusLineInstaller.install(settingsURL: url, bridge: bridge)
-        let parsed = try json(url)
-        XCTAssertEqual(parsed["note"] as? String, #"set "statusLine": here"#)
-        XCTAssertEqual(((parsed["x"] as? [String: Any])?["statusLine"]) as? String, "nested")
-        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).isInstalled)
-    }
-
-    func testNonCommandStatusLineIsReportedNotOverwrittenSilently() throws {
-        let env = try TestEnv()
-        let url = try settingsFile(env, #"{"statusLine":{"type":"text","text":"hello"}}"#)
-        XCTAssertTrue(StatusLineInstaller.inspect(settingsURL: url).usesNonCommandStatusLine)
     }
 }

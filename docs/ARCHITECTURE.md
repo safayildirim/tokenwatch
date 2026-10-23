@@ -101,6 +101,7 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 │  Persistence               FileSynchronizer (checkpoints, zstd) ──► IngestWriter + EntityResolver ──► SQLite   │
 │  Analytics                 AnalyticsEngine · CostSQL/Pricing · ExportService                                    │
 │  Capacity                  SubscriptionPlans · QuotaHistoryAnalyzer · CapacityEstimator · CapacityStrategy       │
+│  Intelligence              QuotaCycleCalendar · SubscriptionUsageAnalyticsEngine · UsageForecastEngine · Insights│
 │  Quota                     QuotaStore (pool/window/cycle/snapshot) · QuotaCoordinator(QuotaFeed) · QuotaEvaluator│
 │                            AlertEngine (account · pool · window · cycle)                                       │
 │  Verification              SourceVerifier (Claude) · CodexVerifier — independent recounts                       │
@@ -116,8 +117,9 @@ Everything lives in one process. The boundaries are logical, enforced by module 
 | Persistence | `UsageDatabase`, `Schema`, `IngestWriter`, `EntityResolver`, `QuotaStore` |
 | Analytics | `AnalyticsEngine`, `PricingCatalog`, `CostSQL`, `ExportService` |
 | Capacity | `CapacityAnalyticsEngine`, `QuotaHistoryAnalyzer`, `CapacityEstimator`, `CapacityStrategy`, `PlanHistoryStore`, `PlanPriceStore`, `CapacityMeasurementStore` |
+| Usage intelligence | `QuotaCurve`, `QuotaCycleCalendar`, `SubscriptionUsageAnalyticsEngine`, `ConsumptionEfficiency`, `CycleComparisonEngine`, `UsageForecastEngine`, `UsageInsightsEngine`, `IntelligenceExport` (see [INTELLIGENCE.md](INTELLIGENCE.md)) |
 | Quota | `QuotaCoordinator`, `QuotaFeed`, `QuotaEvaluator`, `QuotaStateReader`, `AlertEngine` |
-| Presentation | `UsageUI` (including `CapacityPage`) |
+| Presentation | `UsageUI` (including `CapacityPage` and `IntelligencePage`) |
 
 ### Targets
 

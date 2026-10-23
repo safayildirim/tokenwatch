@@ -1,6 +1,6 @@
 # Validation and test results
 
-## 1. Automated tests: 413 tests (`make test`, 2026-10-23: 412 passed, 0 failures, 1 opt-in test skipped)
+## 1. Automated tests: 556 tests (`make test`, 2026-10-23: 555 passed, 0 failures, 1 opt-in test skipped)
 
 `swift test --skip UsageUITests` runs **338 core tests in about 37 seconds, with 0 failures and 1 skipped** (the opt-in real-installation check). The UI target compiles all 64 `UsageUITests`; the full UI suite was not rerun for this change. Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
 
@@ -223,3 +223,53 @@ Not performed: notification delivery, logging out, sleep and wake, and a reboot,
 * **Low: dashboard CPU while open beside a busy session** (12 to 16 %). It is bounded by design and falls to the idle baseline when the window closes; collection itself is unaffected.
 * **Low: `scripts/install.sh` replaces the app in place without keeping a copy.** The README says so and how to keep one.
 * **Low: backup pruning.** After three further rebuilds, history held only in the oldest copy is gone; the confirmation states that three copies are kept.
+
+## 8. Usage intelligence (2026-10-23)
+
+Design and rules: [INTELLIGENCE.md](INTELLIGENCE.md). `make test`: 500 tests, 0 failures, 1 opt-in test skipped (87 more than before this feature). `make build` succeeds. The installed application was not touched.
+
+What the new tests prove, all on synthetic data with independently known answers and the fixed Friday `2026-10-23 00:00 UTC` instead of the current date:
+
+* **Cycle boundaries** (`QuotaCycleCalendarTests`): a weekly reset on Friday 03:00 UTC+3 (Friday 00:00 UTC) is recognised from two observed resets; one second of jitter is the same boundary; stored cycles seconds apart are one cycle; one observed reset establishes nothing; other reset times and time zones; a daylight-saving change leaves a week at exactly 168 hours; a moved schedule is a `scheduleChange`; an early reset is `exceptional`, never negative consumption; five-hour windows keep their reported boundaries and are never filled in; half-open boundaries; calculated cycles are `projected` and never carry readings.
+* **Observation timing** (`QuotaCurveTests`, `SubscriptionQuotaAnalysisTests`): a value is exact inside its confirmed span, bracketed between spans and unavailable outside; a reread never moves a confirmation but a later confirmation extends it; out-of-order delivery gives the same curve; a lower reading is set aside, not a reset; unverified readings are excluded.
+* **Aggregation** (`SubscriptionUsageAggregationTests`): boundary requests belong to the new cycle; sessions spanning a boundary; a request shared by parent and sub-agent counted once; cache categories; models and projects; subscription days versus calendar days (21-hour and 25-hour days); active periods; provider separation.
+* **Quota analytics**: the specification's example (150 M processed, 7 M fresh, readings 2% to 84%) reports a rise of 82 points, a lower bound of 84%, an unknown final value; coverage, completeness and limit handling; exact, bracketed and unavailable daily changes; two accounts and scoped windows stay apart.
+* **Attribution** (`SubscriptionAttributionTests`): unassigned sessions for an identified account, own sessions take precedence, ambiguity when another identified account is active, unassigned history is never merged.
+* **Efficiency** (`ConsumptionEfficiencyTests`): the ratio equals the work between the two exact observations over the rise, with the rounding range; tiny rises, single readings, too little work and uneven workloads are withheld or flagged.
+* **Forecasting** (`ForecastBacktestTests`, `UsageForecastTests`): steady, accelerating, decelerating and irregular weeks; insufficient and sparse data; stale readings; plan change and model-mix warnings; a test proving that changing a later cycle changes no earlier forecast; scores recomputed from their cases; exhaustion only when the range reaches the limit.
+* **Persistence**: a rebuild from source and a restart change no figure and keep quota and plan history; retention leaves less history and invents nothing; analysis writes nothing.
+* **Export and privacy**: every column defined, projected cycles without utilization, no raw identifier or full hash, CSV column count, reproducible row counts.
+* **UI**: logic tests (time zones, schedule wording, curve segments, default window, insight wording) and an offscreen render of the page in light and dark appearance with a synthetic history. A 500-test run also renders every dashboard page with real-shaped data.
+
+### Against this Mac's own history (read-only copy of the database)
+
+* The weekly reset is recognised as **Friday 00:00 UTC, which is Friday 03:00 in UTC+3**, from two observed resets (`2026-10-23T00:00:00Z` confirmed by the next cycle, and `2026-10-30T00:00:00Z`; the account named by the cache reported `2026-10-29T23:59:59Z`, the same boundary).
+* The cycle of 16 to 23 October (Friday 03:00 to Friday 03:00 in UTC+3): 20,437 local requests, 5.14 B processed tokens, 92.4 M fresh. Readings exist only from 99% to 100%, first seen on 22 October at 05:50 UTC, so the start was **not** observed, the limit was reached, and no weekly utilization is claimed for the earlier days.
+* Cycles from 11 September to 16 October have local usage but **no quota readings**; their boundaries are calculated and marked as such, and they carry no percentage.
+* The current account's cache readings begin on 23 October, so its weekly window has one observed reset and no established schedule yet, and its forecast is unavailable. The earlier readings are in the unassigned pool and are not merged with it.
+* Codex weekly windows reset irregularly and usually before the announced reset; they are reported as exceptional resets and no schedule is established. Several Codex cycles with a rise of 10 points or more give reliable ratios (0.1 M to 3.1 M processed tokens per point across cycles, with different model mixes), which is why such ratios are never compared across cycles that differ.
+
+## 9. Usage intelligence reliability phase (2026-10-23)
+
+`make test`: 556 tests, 0 failures, 1 opt-in test skipped. `make build` succeeds. Neither the installed application nor the user's database was changed. Findings, fixes and the decisions behind them are in [INTELLIGENCE.md](INTELLIGENCE.md).
+
+**Defects found and fixed**
+
+* An announced future reset was reported as a confirmed one. Resets are now announced, expected or confirmed, and the schedule has a confidence (`provisional` with one confirmed reset, `confirmed` with two).
+* An "exceptional" early reset was declared from announced times alone. It now needs a reading of the new window with a lower utilization before the announced reset; a changed announcement for the same window merges the two cycles; a shorter-than-nominal window and overlapping readings have their own, non-exceptional classifications.
+* Coverage equated the time between the first and last reading with continuous observation. It was replaced by determined, supported and unresolved figures, with observation counts and pauses stored per snapshot.
+* Retention deleted a quota snapshot by its first sighting, erasing readings still being confirmed. It now uses the last confirmation and removes cycles left empty.
+* Local work was assigned to an identified quota account by assuming that unassigned sessions were its own. It is now tied by the transcript's own owner record or by a user association, shown separately otherwise, and a ratio is withheld unless the measured work is fully attributed.
+* A ratio could straddle a plan change; it is now withheld.
+* The forecast reported the in-sample error of the method it had just picked as best. It now reports held-out errors, needs a minimum of evidence, and refuses forecasts that do not beat assuming no further use.
+
+**Evidence from the data on this Mac** (read-only copy of the database; the copy had the new columns added with conservative values, because the real file predates them)
+
+* The weekly schedule is Friday 00:00 UTC (Friday 03:00 in UTC+3) with **two announced resets and one confirmed**, which is `provisional`. The current account's own window has one announced reset and no schedule yet.
+* 51 of 186 Claude sessions name their account in their transcript, and they carry most of the activity since 16 October. For the week of 16–23 October the unassigned readings (99% to 100%) are therefore paired with only 12% of that week's tokens, which the page states and which withholds every ratio there.
+* Codex windows start at first use (announced reset = first use + 7 days), a later window is sometimes seen before an announced reset with a lower utilization (reported as exceptional), and the announced time of one window sometimes changes without any fall (reported as a changed announcement).
+* Forecasts are unavailable for every window on this machine, because none has four fully observed earlier cycles.
+
+**Real application** (an isolated copy of the build under another name, its own data folder, no source folders; the installed application was not touched): the page was opened in the running process and its accessibility tree read, in English and in Turkish. Every string of the page appeared, and two untranslated strings that this found were translated. Sidebar title, dates and durations follow the language. Offscreen renders cover light, dark, a 760-point width, an empty database, partial and stale readings, sessions that name no account, and two accounts. Resizing a live window and screenshots of the running application were not possible, so the live checks are textual.
+
+**Tests added in this phase** cover announced versus confirmed resets, changed announcements, early resets and rounding, conflicting and irregular windows, coverage definitions, observation counts, migration-free schema columns, associations, transcript account identification, retention, rebuild, backup and delete-all, attribution states, ratio validity (plan change, zero-delta stretch, small rises, cache and model mix), held-out forecasting (leakage, overfitting, minimum evidence, regime change), readiness wording and localization, and the main-thread gap.

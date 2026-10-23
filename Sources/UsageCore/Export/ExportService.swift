@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ExportKind: String, CaseIterable, Sendable, Identifiable {
-    case sessions, requests, projects, models, daily, weekly, quotaHistory, capacityEvidence
+    case sessions, requests, projects, models, daily, weekly, quotaHistory, capacityEvidence, usageIntelligence
     public var id: String { rawValue }
     public var label: String {
         switch self {
@@ -13,6 +13,7 @@ public enum ExportKind: String, CaseIterable, Sendable, Identifiable {
         case .weekly: "Weekly totals"
         case .quotaHistory: "Quota history"
         case .capacityEvidence: "Capacity evidence"
+        case .usageIntelligence: "Subscription usage intelligence"
         }
     }
 }
@@ -216,8 +217,26 @@ public struct ExportService: Sendable {
                         note: "\(review.measurement.label) (\(review.measurement.state.rawValue))"))
                 }
             }
+        case .usageIntelligence:
+            columns = IntelligenceExport.columns
+            try sink.begin(columns)
+            var options = AnalysisOptions()
+            options.from = filter.from
+            options.to = filter.to
+            options.dayGrouping = .subscriptionDay
+            let now = Date()
+            for subject in try SubscriptionUsageAnalyticsEngine.subjects(db) {
+                let report = try SubscriptionUsageAnalyticsEngine.analyze(db, subject: subject, now: now, options: options)
+                let forecast = UsageForecastEngine.forecast(for: report, now: now)
+                for row in IntelligenceExport.rows(report: report, forecast: forecast, zone: calendar.timeZone) {
+                    try sink.write(row)
+                    rows += 1
+                }
+            }
         }
-        try sink.finish(metadata: Self.metadata(kind: kind, columns: columns, range: range, rows: rows, calendar: calendar))
+        var metadata = Self.metadata(kind: kind, columns: columns, range: range, rows: rows, calendar: calendar)
+        if kind == .usageIntelligence { metadata.merge(IntelligenceExport.metadataNotes) { _, new in new } }
+        try sink.finish(metadata: metadata)
         return ExportResult(url: url, rows: rows)
     }
 
@@ -456,7 +475,7 @@ public struct ExportService: Sendable {
         return parts.joined(separator: ";")
     }
 
-    private static func metadata(kind: ExportKind, columns: [Column], range: ClosedRange<Date>?, rows: Int, calendar: Calendar) -> [String: Any] {
+    static func metadata(kind: ExportKind, columns: [Column], range: ClosedRange<Date>?, rows: Int, calendar: Calendar) -> [String: Any] {
         var m: [String: Any] = [
             "export": kind.rawValue,
             "generated_at": iso(Date()),

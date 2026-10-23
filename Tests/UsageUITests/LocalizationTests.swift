@@ -47,4 +47,22 @@ final class LocalizationTests: XCTestCase {
         }
         XCTAssertEqual(problems.sorted(), [])
     }
+
+    /// Strings that explain a limitation to the person must not silently fall back to English. This lists the ones whose absence
+    /// would leave the most important explanations untranslated.
+    func testTheExplanationsOfLimitationsAreTranslated() throws {
+        let turkish = try table("tr")
+        let keys = [
+            "Not enough reliable quota history to forecast usage.",
+            "Which sessions were this account's?",
+            "Reported by the provider",
+            "Estimated exhaustion",
+            "Local usage cannot currently be reliably assigned to this subscription account: the sessions name no account. You can tell Tokenwatch which account used this Mac during a period.",
+            "Only %lld reset has been announced for this window so far. A repeating schedule needs at least two, and until then no earlier or later cycle is calculated.",
+            "Your next %@ reset is expected %@. The schedule (%@) is based on %lld provider-announced reset times and %lld confirmed reset, not on two confirmed reset events. A reset counts as confirmed only once a new window is seen after it.",
+            "The longest stretch in which a rise could have gone unseen: %@.",
+            "Tokens not tied to this account (stacked)",
+        ]
+        for key in keys { XCTAssertNotNil(turkish[key], "missing Turkish text: \(key)") }
+    }
 }

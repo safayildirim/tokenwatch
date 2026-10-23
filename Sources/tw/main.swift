@@ -16,6 +16,7 @@ func usage() -> Never {
       sessions    List the most recent sessions
       quota       Show quota windows and how quota data is arriving
       export      Export data: --kind sessions|requests|projects|models|daily|weekly|quotaHistory --format csv|json --out PATH
+      intelligence Show subscription cycles, local usage, and observed quota per cycle (--zone TZ)
       bench       Import into a fresh database and report time and memory
 
     options:
@@ -233,6 +234,10 @@ do {
         for feed in await coordinator.feedStatus() {
             print("feed \(feed.id.rawValue): source exists=\(feed.sourceExists) path=\(feed.sourcePath ?? "-") folder exists=\(feed.rootsExist) observations=\(feed.observationCount) sources=\(feed.originCount)")
         }
+
+    case "intelligence":
+        let db = try UsageDatabase.open(at: dbURL)
+        try printIntelligence(db: db, zoneName: option("--zone"), now: option("--now").flatMap { Double($0) }.map { Date(timeIntervalSince1970: $0) } ?? Date())
 
     case "export":
         guard let kindName = option("--kind"), let kind = ExportKind(rawValue: kindName),

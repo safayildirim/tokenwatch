@@ -157,3 +157,35 @@ The UI runs the report on a background task. A range or scope change starts a ne
 discards any older report that arrives late, so the page cannot show a stale result. With the page
 closed there is no capacity work at all, and idle CPU/memory are unchanged from the measurements
 above.
+
+## Usage intelligence
+
+Usage intelligence ([INTELLIGENCE.md](INTELLIGENCE.md)) is an **on-demand read path** like capacity analysis. It adds no timer, no file-system observer and no per-event work. With the page closed nothing runs. A choice the user makes recomputes after 30 ms; data changes, which arrive in bursts while a tool is running, wait 3 s for the burst to settle and then compute once on a background task. A newer change cancels the wait and a stale result is dropped.
+
+**Idle cost, measured** (2026-10-23, an isolated copy of the application with its own data folder and no source folders; the production application was not touched). CPU is the instantaneous figure of `top` averaged over its last three samples, taken at least 45 s after the window was opened. An earlier measurement with `ps` was discarded, because `ps` reports the average over the process's whole life and so mostly shows start-up:
+
+```
+                         CPU        footprint
+dashboard closed         0.17%      18 MB
+Overview page open       0.00%      63 MB
+Trends page open         0.00%      67 MB
+Capacity page open       0.00%      116 MB
+Intelligence page open   0.00%      192–198 MB   (first build, with a picker of all 420 time zones)
+```
+
+Nothing of the feature runs while the page is closed, and an open page sat at 0.00% CPU. The page was the heaviest in memory, and a bisection pointed at one control: with the time-zone picker reduced to a single entry the footprint was 122 MB, because a picker of every zone is built eagerly. The page now offers a short menu of common zones and a lazily built, filterable list in a sheet for the rest. One measurement of that build gave 178 MB and 1.2% CPU in a single three-sample window. It was not repeated, because the measurements were stopped at that point, so **the memory saving of the final control is not confirmed**, and the one 1.2% reading is unexplained. A baseline of the previous build was not re-measured with the corrected method.
+
+**Real history, release build** (`tw intelligence`, a read-only copy of this Mac's database: 97,486 requests, 1,019 quota snapshots, 10 quota windows of 2 providers; warm file cache):
+
+```
+tw intelligence (all 10 windows: cycles, coverage, forecast, held-out check, insights)   0.4–0.6 s wall, process start included
+tw export --kind usageIntelligence --format json (292 rows)                              0.6 s wall
+tw export --kind capacityEvidence --format json (existing baseline)                      0.66 s wall
+tw totals (existing baseline)                                                            0.19 s wall
+```
+
+One window costs roughly a tenth of that, and the page analyses one window at a time.
+
+**Synthetic history, debug test build** (`IntelligencePerformanceTests`): 177,600 requests over 26 weeks, two providers. Analysing one provider's newest 14 weekly cycles (about 70,000 requests streamed): analysis 0.45–0.48 s, forecast with the held-out check and insights 0.003 s. The test bounds the analysis at 12 s and the forecast at 1 s.
+
+**Main thread** (`IntelligenceRenderTests`): while the page loads a 20-cycle history with 6,780 requests and draws, a 10 ms main-thread heartbeat saw a longest gap of 0.17–0.39 s across runs in the unoptimized test build. The query runs in a detached task and the same analysis takes 0.04 s when timed alone (the test prints both figures), so the gap is SwiftUI laying out and drawing the page; the test fails above 0.6 s. Nothing in the analysis was changed for speed, because no measurement justified it.

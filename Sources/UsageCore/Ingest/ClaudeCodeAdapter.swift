@@ -109,11 +109,15 @@ public struct ClaudeCodeAdapter: SourceAdapter {
 /// - `assistant` records carry the API `message` with its `usage` object. These are the request
 ///   observations.
 /// - `cost-state` records carry the cost summary that Claude Code computed for the session.
+/// - `bridge-session` records carry `ownerAccountUuid`, which names the account that owns the session. It is the only place
+///   where a transcript says which account it belongs to, and it appears in some sessions only. A session that has it is
+///   attributed to that account; every other session stays unassigned.
 /// - Every other record with a timestamp only contributes to the session's activity window.
 final class ClaudeCodeLineParser: LineParser {
     private let file: SourceFileRef
     private let sourceID: TelemetrySourceID
     private var sessions: [String: SessionObservation] = [:]
+    private var owners: [String: AccountRef] = [:]
     private var agents: [String: AgentObservation] = [:]
 
     /// Timestamps outside this range are treated as clock noise and do not extend a session.
@@ -150,6 +154,7 @@ final class ClaudeCodeLineParser: LineParser {
         var cwdRaw: JSONCursor.RawString?
         var entrypoint: String?
         var version: String?
+        var ownerAccount: String?
         var requestID: String?
         var agentID: String?
         var msg = MessageFields()
@@ -176,6 +181,9 @@ final class ClaudeCodeLineParser: LineParser {
             } else if c.equals(key, "version") {
                 guard let s = c.readRawString() else { return false }
                 version = c.string(s); return true
+            } else if c.equals(key, "ownerAccountUuid") {
+                guard let s = c.readRawString() else { return false }
+                ownerAccount = c.string(s); return true
             } else if c.equals(key, "requestId") {
                 guard let s = c.readRawString() else { return false }
                 requestID = c.string(s); return true
@@ -198,6 +206,9 @@ final class ClaudeCodeLineParser: LineParser {
 
         let effectiveSession = sessionID ?? file.sessionHint
         let effectiveAgent = agentID ?? file.agentHint
+        if let ownerAccount, let reference = ClaudeCodeCacheSource.accountReference(ownerAccount) {
+            owners[effectiveSession] = reference
+        }
 
         if type == "cost-state", let total = costTotal {
             batch.add(CostReportObservation(product: .claudeCode, sessionExternalID: effectiveSession,
@@ -255,11 +266,13 @@ final class ClaudeCodeLineParser: LineParser {
     func flush(into batch: inout NormalizedBatch) {
         for var s in sessions.values {
             s.projectKey = ClaudeCodeAdapter.projectKey(folder: file.projectKey, cwd: s.cwd)
+            if let owner = owners[s.externalID] { s.account = owner }
             batch.add(s)
         }
         for a in agents.values { batch.add(a) }
         sessions.removeAll(keepingCapacity: true)
         agents.removeAll(keepingCapacity: true)
+        owners.removeAll(keepingCapacity: true)
     }
 
     // MARK: Nested objects

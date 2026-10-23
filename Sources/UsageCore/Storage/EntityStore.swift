@@ -189,9 +189,21 @@ enum QuotaStore {
 
         try c.run("""
             INSERT INTO quota_snapshot(window_id, cycle_id, utilization_pct, resets_at, observed_at, last_confirmed_at,
-                telemetry_source_id, origin_session_id, authority)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                telemetry_source_id, origin_session_id, authority, confirmations, max_confirmation_gap_ms)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
             ON CONFLICT(window_id, cycle_id, utilization_pct, authority) DO UPDATE SET
+                -- A confirmation counts only when it moves an end of the span, which a reread of the same file never does. One
+                -- that falls inside the span cannot be told from a reread, so the count is a lower bound.
+                confirmations = CASE
+                    WHEN excluded.last_confirmed_at > quota_snapshot.last_confirmed_at
+                      OR excluded.observed_at < quota_snapshot.observed_at THEN quota_snapshot.confirmations + 1
+                    ELSE quota_snapshot.confirmations END,
+                max_confirmation_gap_ms = CASE
+                    WHEN excluded.last_confirmed_at > quota_snapshot.last_confirmed_at
+                        THEN max(quota_snapshot.max_confirmation_gap_ms, excluded.last_confirmed_at - quota_snapshot.last_confirmed_at)
+                    WHEN excluded.observed_at < quota_snapshot.observed_at
+                        THEN max(quota_snapshot.max_confirmation_gap_ms, quota_snapshot.observed_at - excluded.observed_at)
+                    ELSE quota_snapshot.max_confirmation_gap_ms END,
                 observed_at = min(quota_snapshot.observed_at, excluded.observed_at),
                 last_confirmed_at = max(quota_snapshot.last_confirmed_at, excluded.last_confirmed_at),
                 resets_at = CASE WHEN excluded.last_confirmed_at >= quota_snapshot.last_confirmed_at

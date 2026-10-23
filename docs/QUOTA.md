@@ -223,6 +223,10 @@ Quota history says what the provider reported. Capacity analysis compares **how 
 
 The method, evidence levels, matching rules, purchasing arithmetic and limitations are in [CAPACITY.md](CAPACITY.md).
 
+## From quota history to usage intelligence
+
+The same snapshots feed [INTELLIGENCE.md](INTELLIGENCE.md), which finds each window's reset schedule, groups local usage by the provider's own cycles, and forecasts the end-of-cycle utilization. It reads the stored rows only and changes none of the rules above: a percentage is still never computed from tokens, and a cycle that was calculated from a schedule never carries one. A snapshot's `observed_at` and `last_confirmed_at` describe the span in which a value was **known**, because a value never falls inside a cycle. They do not say how often the value was **observed**: two readings three days apart and a hundred readings give the same span. The `confirmations` and `max_confirmation_gap_ms` columns keep that difference, and the coverage figures never treat the length of a span as the amount of watching.
+
 ## Known limitations
 
 * **The cache schema is provider-written and undocumented.** It can change without notice. The adapter validates known shapes, skips unknown fields and malformed windows, and reports why a snapshot was not used; it cannot promise that a future Claude Code version will keep the same keys.

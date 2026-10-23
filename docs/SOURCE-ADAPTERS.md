@@ -49,7 +49,8 @@ produce:
 * **Local request rows** with all token categories, model, time and enough coverage information to
   price them. A partial record, an unpriced model or a missing required category makes the interval
   ineligible instead of contributing a guess.
-* **An account reference.** `AccountRef.identified` is used only when the source itself carries an
+* **An account reference.** Claude Code transcripts name their owner in exactly one place: `bridge-session` records carry `ownerAccountUuid`, which hashes to the same reference as the account of the quota cache. A session that has such a record is attributed to that account, and every other session stays unassigned. The raw identifier is never stored. A session file written before this was read has to be read again (Diagnostics › Rebuild from source) to be attributed.
+* **An account reference (general rule).** `AccountRef.identified` is used only when the source itself carries an
   identifier. If it does not, `AccountRef.unassigned` is the honest value. A source's plan name is
   metadata, not an account identity, and is never used to split an unassigned account.
 * **Optional plan metadata.** A source that reports a plan type may create a plan period with

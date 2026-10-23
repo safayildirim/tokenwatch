@@ -284,14 +284,15 @@ public final class UsageDatabase: @unchecked Sendable {
                           "project", "model", "source_file", "ingest_issue"] {
                 try c.run("DELETE FROM \(table)")
             }
-            // Accounts and quota history stay: they describe what providers reported, not what the logs contain.
+            // Accounts, quota history, plan periods, capacity measurements and account associations stay: they are what providers
+            // reported or what the user said, and none of it can be recreated from the logs.
         }
     }
 
     /// Deletes everything the app has stored, except the schema.
     public func eraseAllData() throws {
         try write { c in
-            for table in ["capacity_measurement", "plan_assignment", "model_request", "session_reported_model_cost",
+            for table in ["capacity_measurement", "plan_assignment", "account_association", "model_request", "session_reported_model_cost",
                           "agent", "session", "project", "model", "source_file", "ingest_issue", "quota_snapshot",
                           "quota_cycle", "quota_window", "quota_pool", "alert_fired"] {
                 try c.run("DELETE FROM \(table)")

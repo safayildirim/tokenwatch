@@ -256,10 +256,32 @@ enum Schema {
         telemetry_source_id TEXT NOT NULL REFERENCES telemetry_source(id),
         origin_session_id   INTEGER REFERENCES session(id) ON DELETE SET NULL,
         authority           TEXT NOT NULL,
+        -- How many confirmations extended the span in which this value was known, and the longest pause between two of them.
+        -- The span alone is enough to know the value, because a utilization never falls inside a cycle, but it does not say how
+        -- often the value was actually observed. Both are lower-bound style records: a confirmation that falls inside the span
+        -- cannot be told from a reread and is not counted.
+        confirmations           INTEGER NOT NULL DEFAULT 1,
+        max_confirmation_gap_ms INTEGER NOT NULL DEFAULT 0,
         UNIQUE (window_id, cycle_id, utilization_pct, authority)
     ) STRICT;
     CREATE INDEX idx_snapshot_window_time ON quota_snapshot(window_id, last_confirmed_at);
     CREATE INDEX idx_snapshot_cycle ON quota_snapshot(cycle_id, observed_at);
+
+    -- A user's statement that the activity of a provider's sessions which name no account, within a period, belongs to one
+    -- account. It is metadata beside the sessions and never changes them. Periods of one provider never overlap, which
+    -- AccountAssociationStore enforces transactionally.
+    CREATE TABLE account_association (
+        id             INTEGER PRIMARY KEY,
+        provider_id    TEXT NOT NULL REFERENCES provider(id),
+        account_id     INTEGER NOT NULL REFERENCES account(id),
+        effective_from INTEGER NOT NULL,
+        effective_to   INTEGER,
+        note           TEXT NOT NULL DEFAULT '',
+        created_at     INTEGER NOT NULL,
+        updated_at     INTEGER NOT NULL,
+        CHECK (effective_to IS NULL OR effective_to > effective_from)
+    ) STRICT;
+    CREATE INDEX idx_account_association_time ON account_association(provider_id, effective_from, effective_to);
 
     CREATE TABLE price_rate (
         id                         INTEGER PRIMARY KEY,

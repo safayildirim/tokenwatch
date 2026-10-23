@@ -1,5 +1,7 @@
 # Subscription capacity: observed quota, normalized work, and the limits of comparison
 
+> Capacity compares *plans*. For how your own usage and the quota the provider reports move together over subscription cycles, and for forecasts, see [INTELLIGENCE.md](INTELLIGENCE.md). Capacity's work lookup uses the quota account's own sessions only; usage intelligence also handles sessions that name no account.
+
 This document describes the capacity analysis in detail. It is deliberately narrower than a
 subscription-value calculator: it compares how many **provider-reported quota percentage points**
 different plans consumed for the **same normalized local work**, and it refuses to answer when the

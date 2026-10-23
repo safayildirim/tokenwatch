@@ -32,6 +32,7 @@ public struct DashboardView: View {
                 case .models: ModelsPage()
                 case .cost: CostPage()
                 case .quota: QuotaPage()
+                case .intelligence: IntelligencePage()
                 case .capacity: CapacityPage()
                 case .providers: ProvidersPage()
                 case .diagnostics: DiagnosticsPage()

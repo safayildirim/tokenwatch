@@ -14,7 +14,12 @@ extension UsageDatabase {
                 WHERE COALESCE(last_activity_at, 0) < ? AND id NOT IN (SELECT DISTINCT session_id FROM model_request)
                 """, [.int(cutoffMs)])
             try c.run("DELETE FROM project WHERE id NOT IN (SELECT DISTINCT project_id FROM session WHERE project_id IS NOT NULL)")
-            try c.run("DELETE FROM quota_snapshot WHERE observed_at < ?", [.int(cutoffMs)])
+            // A snapshot is removed only when its whole span is older than the cutoff. One that was first seen before the cutoff
+            // but confirmed after it still describes the retained period, and deleting it would erase a reading that nothing can recreate.
+            try c.run("DELETE FROM quota_snapshot WHERE last_confirmed_at < ?", [.int(cutoffMs)])
+            try c.run("""
+                DELETE FROM quota_cycle WHERE last_observed_at < ? AND id NOT IN (SELECT DISTINCT cycle_id FROM quota_snapshot)
+                """, [.int(cutoffMs)])
             try c.run("DELETE FROM alert_fired WHERE fired_at < ?", [.int(cutoffMs)])
             return removed
         }

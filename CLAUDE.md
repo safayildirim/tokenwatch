@@ -199,7 +199,7 @@ High-value orientation only:
 - `Tests/UsageCoreTests/` and `Tests/UsageUITests/`: test targets. `Fixtures/` holds recorded provider files.
 - `Package.swift`: targets and products.
 - `Makefile` and `scripts/`: build, bundle, install, and LaunchAgent logic.
-- `docs/`: `ARCHITECTURE.md` (overall design), `TOKEN-ACCOUNTING.md`, `QUOTA.md`, `SCHEMA.md`, `SOURCE-ADAPTERS.md`, `CAPACITY.md`, `OPENAI-CODEX.md`, `PERFORMANCE.md`, and `VALIDATION.md` (tests and checks against real data).
+- `docs/`: `ARCHITECTURE.md` (overall design), `TOKEN-ACCOUNTING.md`, `QUOTA.md`, `SCHEMA.md`, `SOURCE-ADAPTERS.md`, `CAPACITY.md`, `INTELLIGENCE.md`, `OPENAI-CODEX.md`, `PERFORMANCE.md`, and `VALIDATION.md` (tests and checks against real data).
 - `Localization/`: `en.lproj` and `tr.lproj` strings.
 
 Discover other paths when needed; do not maintain a full repository inventory here.

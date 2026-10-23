@@ -201,6 +201,7 @@ private struct NotificationSettingsView: View {
 private struct DataSettings: View {
     @Environment(AppModel.self) private var model
     @State private var confirmErase = false
+    @State private var eraseRisk: UsageDatabase.RetainedHistory?
 
     private func sourceBinding(_ id: String) -> Binding<Bool> {
         Binding<Bool>(
@@ -234,7 +235,12 @@ private struct DataSettings: View {
             }
             Section("Local data") {
                 Button("Reveal database in Finder") { NSWorkspace.shared.activateFileViewerSelecting([QuotaPaths.databaseURL]) }
-                Button("Delete all collected data…", role: .destructive) { confirmErase = true }
+                Button("Delete all collected data…", role: .destructive) {
+                    Task {
+                        eraseRisk = await model.retainedOnlyHistory()
+                        confirmErase = true
+                    }
+                }
             }
         }
         .formStyle(.grouped)
@@ -242,8 +248,21 @@ private struct DataSettings: View {
             Button("Delete and re-import", role: .destructive) { model.eraseAllData() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your session files are not touched. The history is imported from them again, unless it is outside the retention period. Quota history that came from a status line helper cannot be recovered.")
+            Text(eraseMessage)
         }
+    }
+}
+
+extension DataSettings {
+    /// The erase warning. Erasing is meant to remove the data, so no copy is made, and the warning says plainly what
+    /// cannot be imported again.
+    fileprivate var eraseMessage: String {
+        let lost = eraseRisk.map(\.requests) ?? 0
+        guard lost > 0, let files = eraseRisk?.files else {
+            return String(localized: "Your session files are not touched, and usage is imported from them again unless it is outside the retention period. No copy is kept. Quota history cannot be recovered, because the quota sources keep only their latest reading.")
+        }
+        let requests = Fmt.grouped(Int64(lost))
+        return String(localized: "Your session files are not touched, and usage is imported from them again unless it is outside the retention period. \(requests) stored requests come from \(files) session files that no longer exist; they are deleted permanently. No copy is kept. Quota history cannot be recovered, because the quota sources keep only their latest reading.")
     }
 }
 

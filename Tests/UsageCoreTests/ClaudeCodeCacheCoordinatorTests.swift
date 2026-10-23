@@ -330,4 +330,128 @@ final class ClaudeCodeCacheCoordinatorTests: XCTestCase {
         XCTAssertEqual(state.reading?.source, .claudeCodeCache)
         await c.stop()
     }
+
+    // MARK: Freshness comes from the source's fetch time
+
+    private func lastConfirmed(_ env: TestEnv, _ key: String) throws -> Int64? {
+        try env.db.read {
+            try $0.scalarInt("""
+                SELECT max(q.last_confirmed_at) FROM quota_snapshot q JOIN quota_window w ON w.id = q.window_id
+                WHERE w.window_key = ? AND q.telemetry_source_id = ?
+                """, [.text(key), .text(TelemetrySourceID.claudeCodeCache.rawValue)])
+        }
+    }
+
+    /// Re-reading a snapshot that Claude Code has not fetched again, whether the file was rewritten or the app was
+    /// restarted, must never make it look newly confirmed, however much later the read happens.
+    func testReReadingTheSameSnapshotLaterNeverMakesItFresher() async throws {
+        let env = try TestEnv()
+        let cache = env.root.appendingPathComponent("claude/.claude.json")
+        let fetched = now.addingTimeInterval(-5 * 60)
+        let data = cacheDocument(account: accountA, fetchedAt: fetched, five: 20, week: 40, reset: reset)
+        try writeCache(cache, data)
+        let first = coordinator(env, cache: cache)
+        await first.refresh(force: true)
+        let beforeRestart = try await windowState(first, "300m")
+        XCTAssertEqual(beforeRestart.freshness, .fresh)
+        await first.stop()
+
+        // Three hours later the whole file is rewritten with the same snapshot, then the app restarts and reads it.
+        let later = now.addingTimeInterval(3 * 3_600)
+        try writeCache(cache, data, atomic: false)
+        try env.reopen()
+        let second = coordinator(env, cache: cache, now: later)
+        await second.refresh(force: true)
+        await second.refresh(force: true)
+        let state = try await windowState(second, "300m")
+        XCTAssertEqual(state.reading?.observedAt, fetched, "the reading is as old as Claude Code's fetch, not as the read")
+        XCTAssertEqual(state.freshness, .stale)
+        XCTAssertFalse(state.isAlertEligible, "a stale reading must not drive an alert")
+        XCTAssertEqual(try lastConfirmed(env, "300m"), Clock.ms(fetched))
+        XCTAssertEqual(try snapshotCount(env), 2)
+        await second.stop()
+    }
+
+    /// A genuinely newer fetch confirms the reading again even when the percentages have not moved, and it does so
+    /// without adding a second snapshot of the same value.
+    func testANewerFetchWithTheSamePercentagesRefreshesTheReading() async throws {
+        let env = try TestEnv()
+        let cache = env.root.appendingPathComponent("claude/.claude.json")
+        let oldFetch = now.addingTimeInterval(-3 * 3_600)
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: oldFetch, five: 20, week: 40, reset: reset))
+        let c = coordinator(env, cache: cache)
+        await c.refresh(force: true)
+        let beforeNewFetch = try await windowState(c, "300m")
+        XCTAssertEqual(beforeNewFetch.freshness, .stale)
+
+        let newFetch = now.addingTimeInterval(-60)
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: newFetch, five: 20, week: 40, reset: reset))
+        await c.refresh(force: true)
+        let state = try await windowState(c, "300m")
+        XCTAssertEqual(state.utilizationPercent, 20)
+        XCTAssertEqual(state.reading?.observedAt, newFetch)
+        XCTAssertEqual(state.freshness, .fresh)
+        XCTAssertTrue(state.isAlertEligible)
+        XCTAssertEqual(try lastConfirmed(env, "300m"), Clock.ms(newFetch))
+        XCTAssertEqual(try snapshotCount(env), 2, "the same value is confirmed again, not stored twice")
+
+        // An older snapshot that appears afterwards, for example from a restored file, does not move it back.
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: oldFetch, five: 20, week: 40, reset: reset))
+        await c.refresh(force: true)
+        XCTAssertEqual(try lastConfirmed(env, "300m"), Clock.ms(newFetch))
+        await c.stop()
+    }
+
+    /// A window whose reset time has passed is unknown until Claude Code fetches again. It is never shown as zero
+    /// and it is never alerted on.
+    func testAnExpiredWindowIsUnknownNotZero() async throws {
+        let env = try TestEnv()
+        let cache = env.root.appendingPathComponent("claude/.claude.json")
+        let fiveReset = now.addingTimeInterval(-60)
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-30 * 60),
+                                            five: 85, week: 40, reset: reset, fiveReset: fiveReset))
+        let c = coordinator(env, cache: cache)
+        await c.refresh(force: true)
+        let state = try await windowState(c, "300m")
+        XCTAssertEqual(state.availability, .windowElapsed(resetAt: fiveReset))
+        XCTAssertFalse(state.isDisplayable)
+        XCTAssertFalse(state.isAlertEligible)
+        let weekly = try await windowState(c, "10080m")
+        XCTAssertEqual(weekly.utilizationPercent, 40, "the weekly window is still open")
+        await c.stop()
+    }
+
+    /// The clock moving forward ages a reading normally. The clock moving back leaves a stored reading dated in the
+    /// future; how old it really is cannot be known, so it is stale rather than new. A snapshot that claims to have
+    /// been fetched in the future is not recorded at all.
+    func testClockChangesNeverMakeAReadingLookNewer() async throws {
+        let env = try TestEnv()
+        let cache = env.root.appendingPathComponent("claude/.claude.json")
+        try writeCache(cache, cacheDocument(account: accountA, fetchedAt: now.addingTimeInterval(-60), five: 20, week: 40, reset: reset))
+        let c = coordinator(env, cache: cache)
+        await c.refresh(force: true)
+        let beforeClockChange = try await windowState(c, "300m")
+        XCTAssertEqual(beforeClockChange.freshness, .fresh)
+        await c.stop()
+
+        let forward = coordinator(env, cache: cache, now: now.addingTimeInterval(3 * 3_600))
+        await forward.refresh(force: true)
+        let afterClockForward = try await windowState(forward, "300m")
+        XCTAssertEqual(afterClockForward.freshness, .stale)
+        await forward.stop()
+
+        let back = coordinator(env, cache: cache, now: now.addingTimeInterval(-2 * 3_600))
+        await back.refresh(force: true)
+        let state = try await windowState(back, "300m")
+        XCTAssertEqual(state.freshness, .stale)
+        XCTAssertFalse(state.isAlertEligible)
+        await back.stop()
+
+        let future = env.root.appendingPathComponent("claude-future/.claude.json")
+        try writeCache(future, cacheDocument(account: accountB, fetchedAt: now.addingTimeInterval(3_600), five: 99, week: 99, reset: reset))
+        let ahead = coordinator(env, cache: future)
+        await ahead.refresh(force: true)
+        XCTAssertNil(try lastConfirmed(env, "300m").flatMap { $0 > Clock.ms(now) ? $0 : nil }, "a future-dated fetch is not stored")
+        await ahead.stop()
+    }
 }

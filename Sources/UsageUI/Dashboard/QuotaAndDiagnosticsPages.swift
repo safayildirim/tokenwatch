@@ -387,6 +387,8 @@ struct DiagnosticsPage: View {
     @State private var running = false
     @State private var stats = ProcessStats.sample()
     @State private var counts: DBCounts?
+    @State private var rebuildRisk: UsageDatabase.RetainedHistory?
+    @State private var confirmRebuild = false
 
     struct DBCounts: Sendable { var requests: Int64; var sessions: Int64; var files: Int64; var malformed: Int64; var issues: [IssueRow]; var notices: [IssueRow]; var sizeMB: Double }
     struct IssueRow: Identifiable, Sendable { var id: Int64; var at: Date; var path: String?; var message: String }
@@ -429,7 +431,11 @@ struct DiagnosticsPage: View {
                         GridRow { Text("Log files tracked").foregroundStyle(.secondary); Text(Fmt.grouped(c.files)) }
                         GridRow { Text("Malformed log lines skipped").foregroundStyle(.secondary); Text(Fmt.grouped(c.malformed)) }
                         if model.openReport.recoveredFromCorruption {
-                            GridRow { Text("Recovery").foregroundStyle(.secondary); Text("A damaged database was replaced and history re-imported.").foregroundStyle(Palette.warning) }
+                            GridRow {
+                                Text("Recovery").foregroundStyle(.secondary)
+                                Text("A damaged database was moved aside to \(model.openReport.quarantinedTo?.path ?? "-") and replaced. Usage was imported again from the session files that still exist. Usage from files that had already been deleted is only in the moved file, which Tokenwatch never deletes.")
+                                    .foregroundStyle(Palette.warning).textSelection(.enabled)
+                            }
                         }
                     }.font(.callout)
                 }
@@ -439,8 +445,13 @@ struct DiagnosticsPage: View {
                         run { integrity = (try? model.db.integrityCheck().joined(separator: ", ")) ?? failed }
                     }
                     Button("Verify against source files") { verify() }
-                    Button("Rebuild from source…") { model.rebuildFromSource() }
-                        .help("Deletes usage records and imports them again from the original files.")
+                    Button("Rebuild from source…") {
+                        Task {
+                            rebuildRisk = await model.retainedOnlyHistory()
+                            confirmRebuild = true
+                        }
+                    }
+                    .help("Deletes usage records and imports them again from the original files, after saving a copy of the database.")
                     Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([QuotaPaths.databaseURL]) }
                     if running { ProgressView().controlSize(.small) }
                 }
@@ -481,6 +492,12 @@ struct DiagnosticsPage: View {
         }
         .task(id: model.dataVersion) { await load() }
         .task { while !Task.isCancelled { try? await Task.sleep(for: .seconds(5)); stats = ProcessStats.sample() } }
+        .confirmationDialog("Rebuild usage history from the session files?", isPresented: $confirmRebuild, titleVisibility: .visible) {
+            Button("Save a copy and rebuild", role: .destructive) { model.rebuildFromSource() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(rebuildMessage)
+        }
     }
 
     private func stateText(_ s: SourceHealth) -> String {
@@ -495,6 +512,18 @@ struct DiagnosticsPage: View {
     private func run(_ work: @escaping @Sendable () -> Void) {
         running = true
         Task.detached { work(); await MainActor.run { running = false } }
+    }
+
+    /// The rebuild warning. It names the history that only the database still holds, because a rebuild cannot import
+    /// it again, and it says where the copy made beforehand is kept.
+    private var rebuildMessage: String {
+        let folder = model.db.backupDirectory.path
+        let kept = UsageDatabase.backupsKept
+        guard let risk = rebuildRisk, risk.requests > 0 else {
+            return String(localized: "Usage records are deleted and imported again from the session files. A complete copy of the database is saved first in \(folder). Tokenwatch keeps the \(kept) newest copies.")
+        }
+        let requests = Fmt.grouped(Int64(risk.requests))
+        return String(localized: "\(requests) stored requests come from \(risk.files) session files that no longer exist. A rebuild cannot import them again, so they will disappear from the dashboard. A complete copy of the database, including them, is saved first in \(folder). Tokenwatch keeps the \(kept) newest copies.")
     }
 
     private func verify() {

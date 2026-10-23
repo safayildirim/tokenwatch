@@ -174,7 +174,9 @@ public final class AppModel {
         await collector.start()
         await liveness.start()
         await quota.start()
-        if db.openReport.recoveredFromCorruption { await collector.rebuildFromSource() }
+        // After corruption recovery the new database holds only what the session files contain, so there is nothing
+        // unique to copy. The old history is in the moved-aside file, which is never deleted.
+        if db.openReport.recoveredFromCorruption { await collector.rebuildFromSource(keepingCopy: false) }
 
         let collectorEvents = await collector.events()
         let collectorEvents2 = await collector.events()
@@ -459,10 +461,17 @@ public final class AppModel {
 
     public func rebuildFromSource() { Task { await collector.rebuildFromSource() } }
 
+    /// Counts the stored usage whose session files are gone, which a rebuild or an erase cannot bring back. It is
+    /// shown before either action, so that neither one loses history without saying so.
+    public func retainedOnlyHistory() async -> UsageDatabase.RetainedHistory? {
+        let db = self.db
+        return await Task.detached { try? db.retainedOnlyHistory() }.value
+    }
+
     public func eraseAllData() {
         Task {
             try? db.eraseAllData()
-            await collector.rebuildFromSource()
+            await collector.rebuildFromSource(keepingCopy: false)
             requestRefresh()
         }
     }

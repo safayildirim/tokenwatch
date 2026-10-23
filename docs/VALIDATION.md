@@ -1,6 +1,6 @@
 # Validation and test results
 
-## 1. Automated tests: 405 tests (`make test`, 2026-10-23: 0 failures, 1 skipped)
+## 1. Automated tests: 413 tests (`make test`, 2026-10-23: 412 passed, 0 failures, 1 opt-in test skipped)
 
 `swift test --skip UsageUITests` runs **338 core tests in about 37 seconds, with 0 failures and 1 skipped** (the opt-in real-installation check). The UI target compiles all 64 `UsageUITests`; the full UI suite was not rerun for this change. Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
 
@@ -200,3 +200,29 @@ These were run against the installed app and the real data on this Mac. Recounts
 * **Prices.** The Anthropic and OpenAI cards were compared with the providers' pricing pages. Sonnet 5.5's cache-hit price was corrected from 0.20 to 0.10 US$ per million tokens (0.05× input), which lowered the estimate for this Mac's history by US$982.44. The estimate is now within 4.1 % of Claude Code's own recorded session costs.
 
 Not performed: notification delivery, logging out, sleep and wake, and a reboot, which are in section 5; the live status-line payload; screenshots and the appearance of the real window, because screen capture is not available to the tooling.
+
+## 7. Release-safety audit (2026-10-23)
+
+**Retained history.** Claude Code deletes transcripts after 30 days by default; on this Mac 1,122 stored requests came from 16 deleted transcripts. Every path that can remove stored usage was checked:
+
+| Path | Before | Now |
+|---|---|---|
+| Restart, reconciliation, a file replaced or truncated | Requests kept; a vanished file is only marked `missing` | Unchanged, now covered end to end |
+| Rebuild from source | Deleted retained-only requests without warning or copy; no confirmation at all | Confirmation names the requests that cannot be imported again; a `VACUUM INTO` copy is written first (three newest kept, `0700` folder, `0600` files); nothing is deleted if the copy fails |
+| Corruption recovery | Damaged file moved aside, but Diagnostics claimed the history was re-imported | Damaged file still never deleted; Diagnostics names its path and says which usage is only there |
+| Delete all collected data | Claimed history is imported again | No copy, by design; the confirmation names what is lost permanently |
+
+`RetainedHistoryTests` (4) imports two sessions, deletes one transcript, reconciles, restarts and rebuilds, and checks that the requests survive until the rebuild, that the copy is self-contained, private and complete, that only three copies are kept, that erasing leaves no copy even when a file event re-imports in between, and that a damaged database keeps every request in the moved-aside file.
+
+**Claude cache freshness.** The observation time is the snapshot's `fetchedAtMs`, never the file's modification time or the time of reading, and `last_confirmed_at` only moves forward. Four tests were added to `ClaudeCodeCacheCoordinatorTests`: re-reading the same snapshot after a rewrite and a restart three hours later leaves it stale and not alert-eligible; a newer fetch with identical percentages makes it fresh again without adding a row, and an older snapshot read afterwards cannot move it back; an expired window is unknown, not zero, and not alerted on; a clock moved forward ages a reading, a clock moved back makes it stale, and a future-dated fetch is not stored. The account and two-source cases were already covered. No defect was found.
+
+**Post-release work, by severity.** None of these is a confirmed high-severity correctness, privacy or data-loss defect, so none was changed in this release.
+
+* **Medium: duplicate pools and alerts with the optional status line.** Installing the status line shows one Claude subscription as an identified pool (cache) and an unassigned pool (status line), and a threshold can be announced once for each. The helper is not installed. Pools are not merged, because the status line carries no account identity.
+* **Medium: Codex's alpha file format.** A change of shape can stop collection; unrecognized usage lines are reported in Diagnostics rather than counted as nothing.
+* **Medium: real sleep, reboot, login and notification delivery** are unverified until the manual procedure in section 5 is carried out.
+* **Low: unassigned historical accounts.** Older Codex files and pre-attribution Claude cache readings stay in unassigned pools as history.
+* **Low: menu bar icon under the notch.** Detected, with a Dock icon offered; the app cannot move the icon.
+* **Low: dashboard CPU while open beside a busy session** (12 to 16 %). It is bounded by design and falls to the idle baseline when the window closes; collection itself is unaffected.
+* **Low: `scripts/install.sh` replaces the app in place without keeping a copy.** The README says so and how to keep one.
+* **Low: backup pruning.** After three further rebuilds, history held only in the oldest copy is gone; the confirmation states that three copies are kept.

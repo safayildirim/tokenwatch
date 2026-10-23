@@ -36,6 +36,8 @@ scripts/install.sh          # copies it to /Applications (or ~/Applications) and
 
 `make universal` (or `scripts/build-app.sh --universal`) builds for Apple silicon and Intel.
 
+`make install` quits a running copy and replaces the installed app in place; it keeps no copy of the previous version. To keep one, move `/Applications/Tokenwatch.app` aside first (for example to `~/Tokenwatch-backups/`) and move it back to roll back. Installing never touches the usage database in `~/Library/Application Support/Tokenwatch`, your Claude Code settings or your login items.
+
 This is a menu bar app with no Dock icon, so look for the ✦ icon at the top right of the screen. If your menu bar is full, macOS hides new icons under the notch; the app detects that and shows a Dock icon instead (or turn on Settings → General → *Show in the Dock*). Opening the app from Applications opens the dashboard (as does the very first launch). The first launch imports your existing Claude Code history automatically. Watch the progress in the menu bar popover. Nothing needs to be registered: new sessions, projects and IDEs are discovered on their own.
 
 ### Launch at login
@@ -113,6 +115,8 @@ Settings → Export, or `tw export`. Session history, request-level usage, proje
 ### Data retention and deletion
 
 Settings → Data: keep history forever or for 90 days to 2 years, and delete everything the app has collected. Your original Claude Code files are never modified.
+
+Claude Code deletes its transcripts after 30 days by default, but Tokenwatch keeps the usage it already recorded from them, so the database can hold the only copy of older history. **Rebuild from source** (Diagnostics) can import only the files that still exist: it tells you how many requests it cannot bring back and saves a complete copy of the database first, in `~/Library/Application Support/Tokenwatch/backups` (the three newest copies are kept). **Delete all collected data** keeps no copy. A damaged database is moved aside as `usage.sqlite.corrupt-<time>` and never deleted. Details and restore steps: [SCHEMA](docs/SCHEMA.md#recovery).
 
 ## Command line tool
 

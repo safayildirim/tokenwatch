@@ -205,6 +205,77 @@ public final class UsageDatabase: @unchecked Sendable {
         return total
     }
 
+    /// This is the stored usage whose source file no longer exists on disk, so the database holds its only copy.
+    ///
+    /// Claude Code deletes old transcripts on its own schedule, and the database keeps their requests. A rebuild
+    /// imports only the files that still exist, so these requests are exactly what a rebuild would lose.
+    public struct RetainedHistory: Sendable, Equatable {
+        public var files = 0
+        public var requests = 0
+    }
+
+    public func retainedOnlyHistory() throws -> RetainedHistory {
+        let rows = try read { c in
+            try c.query("""
+                SELECT f.path, count(*) FROM model_request r JOIN source_file f ON f.id = r.origin_file_id GROUP BY f.id
+                """) { ($0.text(0), Int($0.int(1))) }
+        }
+        var result = RetainedHistory()
+        for (path, count) in rows where !FileManager.default.fileExists(atPath: path) {
+            result.files += 1
+            result.requests += count
+        }
+        return result
+    }
+
+    /// The folder that holds the copies made before a rebuild. It sits next to the database, so a test database
+    /// keeps its backups in its own scratch folder.
+    public var backupDirectory: URL { url.deletingLastPathComponent().appendingPathComponent("backups") }
+
+    /// This many backups are kept. Each one is a complete copy of the usage history, so the limit bounds both the
+    /// disk space used and the number of copies of the metadata that exist.
+    public static let backupsKept = 3
+
+    /// Writes a consistent copy of the whole database into `backupDirectory`, before a rebuild, and returns its location.
+    ///
+    /// `VACUUM INTO` copies the committed state as one transaction, including whatever is still only in the
+    /// write-ahead log, so the copy is a complete database file that opens without its `-wal` and `-shm` files. The
+    /// folder is private to the user and the file is readable only by the user. After writing, only the newest
+    /// `backupsKept` backups are kept.
+    @discardableResult
+    public func backUpBeforeRebuild() throws -> URL {
+        let fm = FileManager.default
+        try fm.createDirectory(at: backupDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        var target = backupDirectory.appendingPathComponent("usage-before-rebuild-\(formatter.string(from: Date())).sqlite")
+        var attempt = 1
+        while fm.fileExists(atPath: target.path) {
+            attempt += 1
+            target = backupDirectory.appendingPathComponent("usage-before-rebuild-\(formatter.string(from: Date()))-\(attempt).sqlite")
+        }
+        writerLock.lock()
+        defer { writerLock.unlock() }
+        try writer.run("VACUUM INTO ?", [.text(target.path)])
+        chmod(target.path, 0o600)
+        try pruneBackups()
+        return target
+    }
+
+    /// The backups that exist, newest first.
+    public func backups() -> [URL] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: backupDirectory.path)) ?? []
+        // The names carry a sortable UTC time stamp, so sorting them by name sorts them by age.
+        return names.filter { $0.hasPrefix("usage-before-rebuild-") && $0.hasSuffix(".sqlite") }.sorted(by: >)
+            .map { backupDirectory.appendingPathComponent($0) }
+    }
+
+    private func pruneBackups() throws {
+        for old in backups().dropFirst(Self.backupsKept) { try FileManager.default.removeItem(at: old) }
+    }
+
     /// Removes every observation derived from usage logs, keeping settings, quota history and
     /// price rates. Used by "rebuild from source" and by the local-data deletion action.
     public func resetDerivedUsageData() throws {

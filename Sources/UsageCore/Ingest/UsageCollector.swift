@@ -71,7 +71,7 @@ public actor UsageCollector {
     private enum Work {
         case drainPaths
         case reconcile(String)
-        case rebuild
+        case rebuild(keepingCopy: Bool)
     }
 
     private let db: UsageDatabase
@@ -200,8 +200,13 @@ public actor UsageCollector {
     }
 
     /// Discards everything derived from source logs and imports it again.
-    public func rebuildFromSource() {
-        enqueue(.rebuild)
+    ///
+    /// A user-initiated rebuild keeps a copy of the database first, because it can hold usage whose transcripts are
+    /// gone. The rebuild that follows "delete all collected data" passes `keepingCopy: false`, since that action is a
+    /// request to remove the data. Whether the table happens to be empty is not used to decide, because a file event
+    /// can import new usage between the erase and the rebuild.
+    public func rebuildFromSource(keepingCopy: Bool = true) {
+        enqueue(.rebuild(keepingCopy: keepingCopy))
     }
 
     // MARK: Queue
@@ -233,8 +238,8 @@ public actor UsageCollector {
             await syncChangedPaths(batch)
         case .reconcile(let reason):
             await reconcile(reason: reason)
-        case .rebuild:
-            await rebuild()
+        case .rebuild(let keepingCopy):
+            await rebuild(keepingCopy: keepingCopy)
         }
     }
 
@@ -340,9 +345,17 @@ public actor UsageCollector {
         scheduleRetryIfNeeded()
     }
 
-    private func rebuild() async {
+    private func rebuild(keepingCopy: Bool) async {
         failedFiles.removeAll()
-        do { try db.resetDerivedUsageData() } catch {
+        do {
+            // A rebuild imports only the files that still exist, and Claude Code deletes old transcripts, so the
+            // database can hold the only copy of some history. A consistent copy is written first. If it cannot be
+            // written, nothing is deleted. An empty database, as after corruption recovery, has nothing to keep.
+            if keepingCopy, (try db.read { try $0.scalarInt("SELECT count(*) FROM model_request") } ?? 0) > 0 {
+                try db.backUpBeforeRebuild()
+            }
+            try db.resetDerivedUsageData()
+        } catch {
             for a in adapters { recordSourceFailure(a.sourceID, error: error, filePath: nil) }
             return
         }

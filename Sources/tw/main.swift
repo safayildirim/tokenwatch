@@ -149,6 +149,10 @@ do {
             formattedLine("cache_read", report.sourceTotals.cacheRead, report.databaseTotals.cacheRead)
             formattedLine("cache_creation", report.sourceTotals.cacheCreation, report.databaseTotals.cacheCreation)
             print("naive sum of every line (the wrong way): output=\(formatted(report.naiveSumOfAllLines.output)) cache_read=\(formatted(report.naiveSumOfAllLines.cacheRead))")
+            if report.retainedRequests > 0 {
+                let r = report.retainedTotals
+                print("retained history (transcripts Claude Code has deleted, not recountable): files=\(report.retainedFiles) requests=\(formatted(Int64(report.retainedRequests))) uncached_input=\(formatted(r.uncachedInput)) output=\(formatted(r.output)) cache_read=\(formatted(r.cacheRead)) cache_creation=\(formatted(r.cacheCreation))")
+            }
             for m in report.mismatches.prefix(10) { print("mismatch \(m.sessionID) \(m.field): database=\(m.database) source=\(m.source)") }
             print(report.isConsistent ? "RESULT: consistent" : "RESULT: INCONSISTENT (\(report.mismatches.count) mismatches)")
             consistent = consistent && report.isConsistent

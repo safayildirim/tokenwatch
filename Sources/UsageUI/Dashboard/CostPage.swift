@@ -44,7 +44,7 @@ struct CostPage: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(model.providerName(row.provider)).font(.subheadline.weight(.semibold))
                                 if row.cost.derivedTokens > 0 {
-                                    Text("\(Fmt.tokens(row.cost.derivedTokens)) tokens date from before a price cut. The provider announced the cut as a percentage, so the earlier price is worked out from the published price after it and was not itself published.")
+                                    Text("\(Fmt.tokens(row.cost.derivedTokens)) tokens date from before a price cut. The provider announced the cut as a percentage, so the earlier price is worked out from the published price after it and was not itself published. Costs for that period are approximate.")
                                 }
                                 if row.cost.userPricedTokens > 0 {
                                     Text("\(Fmt.tokens(row.cost.userPricedTokens)) tokens are priced with prices that you entered.")

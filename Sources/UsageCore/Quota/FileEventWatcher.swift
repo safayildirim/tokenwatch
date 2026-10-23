@@ -10,7 +10,7 @@ import Foundation
 /// the file appears.
 final class FileEventWatcher: @unchecked Sendable {
     private let url: URL
-    private let queue = DispatchQueue(label: "usage-monitor.file-events", qos: .utility)
+    private let queue = DispatchQueue(label: "tokenwatch.file-events", qos: .utility)
     private let queueKey = DispatchSpecificKey<Void>()
     private let continuation: AsyncStream<Void>.Continuation
     let events: AsyncStream<Void>

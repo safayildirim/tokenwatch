@@ -275,17 +275,28 @@ final class ClaudeCodeCacheTests: XCTestCase {
         XCTAssertEqual(parse(document(account: "not-a-uuid", fetchedAtMs: fetchedMs, utilization: utilization)).issue, .invalidAccount)
     }
 
-    func testTheRawAccountIdentifierIsNeverExposed() throws {
+    func testTheRawAccountIdentifierIsNeverExposedAndCacheReadingsCarryItsReference() throws {
         let reading = parse(realShape)
         let dump = String(describing: reading)
         XCTAssertFalse(dump.contains(account))
         XCTAssertFalse(dump.contains(account.lowercased()))
-        XCTAssertNotEqual(reading.accountFingerprint, account)
+        let fingerprint = try XCTUnwrap(reading.accountFingerprint)
+        XCTAssertNotEqual(fingerprint, account)
         for observation in reading.observations {
             XCTAssertFalse(String(describing: observation).contains(account))
-            XCTAssertTrue(observation.account.isUnassigned,
-                          "the status line has no account identity, so the cache and status line stay in one explicit pool")
+            XCTAssertFalse(observation.account.isUnassigned,
+                           "the cache names its account, so its readings must not share the status line's unassigned pool")
+            XCTAssertEqual(observation.account.hash, fingerprint)
+            XCTAssertEqual(observation.account.provider, .anthropic)
         }
+    }
+
+    func testTheCacheAccountReferenceIsStableAndCaseInsensitive() throws {
+        let expected = ClaudeCodeCacheSource.accountFingerprint(account)
+        XCTAssertEqual(expected, ClaudeCodeCacheSource.accountFingerprint(account.lowercased()))
+        XCTAssertNotEqual(expected, ClaudeCodeCacheSource.accountFingerprint("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"))
+        XCTAssertNil(ClaudeCodeCacheSource.accountFingerprint("not-a-uuid"))
+        XCTAssertEqual(parse(realShape).observations.first?.account.hash, expected)
     }
 
     func testASnapshotWithoutAnyUsableWindowReportsNoUsage() {

@@ -11,7 +11,7 @@ import Foundation
 /// cards are in `OpenAIPricing.swift`.
 public enum PricingCatalog {
     /// The date on which the Anthropic list prices were checked.
-    public static let asOf = "2026-10-06"
+    public static let asOf = "2026-10-23"
 
     /// The dates on which the built-in prices were checked, for the places that tell the user how current they are.
     public static var asOfSummary: String { "Anthropic as of \(asOf), OpenAI as of \(openAIAsOf)" }
@@ -29,7 +29,7 @@ public enum PricingCatalog {
         add("claude-opus-4-8", 5, 25, 0.50)
         add("claude-opus-4-7", 5, 25, 0.50)
         add("claude-opus-4-6", 5, 25, 0.50)
-        add("claude-sonnet-5-5", 2, 10, 0.20)
+        add("claude-sonnet-5-5", 2, 10, 0.10)
         add("claude-sonnet-5", 2, 10, 0.20)
         add("claude-sonnet-4-6", 3, 15, 0.30)
         add("claude-haiku-4-5", 1, 5, 0.10)

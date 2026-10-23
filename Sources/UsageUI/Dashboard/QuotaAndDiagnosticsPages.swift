@@ -512,6 +512,10 @@ struct DiagnosticsPage: View {
                     lines.append(r.isConsistent
                         ? String(localized: "Claude Code: \(r.sessionsChecked) sessions and \(requests) requests recounted independently match the database exactly. (Adding up every log line instead would have overstated cache reads by \(overstated)×.)")
                         : String(localized: "Claude Code: mismatch in \(r.mismatches.count) places. Use \"Rebuild from source\" to repair, and please report it."))
+                    if r.retainedRequests > 0 {
+                        let retained = Fmt.grouped(Int64(r.retainedRequests))
+                        lines.append(String(localized: "Claude Code: \(retained) stored requests come from \(r.retainedFiles) transcripts that Claude Code has since deleted. They are kept as history and cannot be recounted."))
+                    }
                 } catch { lines.append(String(localized: "Claude Code: verification failed: \(String(describing: error))")) }
             }
             if enabled.contains(.codexRollouts) {

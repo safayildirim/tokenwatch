@@ -99,18 +99,19 @@ Costs are API-equivalent estimates at published list prices, kept strictly apart
 * A model with no rate card is **unpriced**: its tokens are excluded and counted in `unpricedTokens`, and the figure is shown as a lower bound ("$12.34+"). No generic fallback price is used, and a model is never priced as a similarly named one.
 * Every card is **published**, **derived** or **yours**, and the cost page says how many of the priced tokens used each. A derived price is the price before a cut that the provider announced as a percentage, worked out from the published price after it.
 * If a source reports its own cost (Claude Code's per-session `cost-state`), it is stored in separate columns and displayed next to, never merged with, the estimate.
+* Anthropic prices cache hits on Opus 5.5 and Sonnet 5.5 at 0.05× the base input price, and on Fable 5.1 at 0.025×; every other Claude model uses 0.1×. The built-in Anthropic cards were last checked against platform.claude.com/docs/en/about-claude/pricing on 2026-10-23, when Sonnet 5.5's cache-hit price was corrected from 0.20 to 0.10 US$ per million tokens.
 
-Validated against Claude Code's own recorded session costs on this machine (164 sessions): median per-session deviation 0.4 %, total within 7.4 %. Differences come from mid-session snapshots in Claude Code's record and from price assumptions made by Claude Code itself.
+Validated against Claude Code's own recorded session costs on this machine (180 sessions, 2026-10-23): median per-session deviation 0.5 %, total within 4.1 % ($7,938.59 estimated against $8,275.28 recorded). Differences come from mid-session snapshots in Claude Code's record and from price assumptions made by Claude Code itself.
 
 ### OpenAI prices
 
-Read on 2026-10-20 from OpenAI's pricing page and changelog (developers.openai.com/api/docs/pricing and /changelog). Prices are US$ per million tokens for prompts up to 272,000 tokens; reasoning tokens are part of output and are priced once.
+Read on 2026-10-23 from OpenAI's pricing page and changelog (developers.openai.com/api/docs/pricing and /changelog). Prices are US$ per million tokens for prompts up to 272,000 tokens; reasoning tokens are part of output and are priced once.
 
 | Model | Card from | Input | Cached | Output | Basis |
 |---|---|---|---|---|---|
 | `gpt-5.5` | 2026-04-24 | 5.00 | 0.50 | 30.00 | published |
 | `gpt-5.6-sol` | 2026-08-21 | 4.00 | 0.40 | 20.00 | published (promotional, announced through 2026-11-21) |
-| `gpt-5.6-sol` | 2026-07-09 | 5.00 | 0.50 | 30.00 | **derived** from the 2026-08-21 cut |
+| `gpt-5.6-sol` | 2026-07-09 | 5.00 | 0.50 | 30.00 | **derived** from the 2026-08-21 cut (20 % lower input, 33 % lower output; 30.00 assumes the 33 % was one third, and read literally it would be 29.85) |
 | `gpt-5.6-terra` | 2026-07-30 | 2.00 | 0.20 | 12.00 | published |
 | `gpt-5.6-terra` | 2026-07-09 | 2.50 | 0.25 | 15.00 | **derived** (20 % cut on 2026-07-30) |
 | `gpt-5.6-luna` | 2026-07-30 | 0.20 | 0.02 | 1.20 | published |
@@ -118,9 +119,9 @@ Read on 2026-10-20 from OpenAI's pricing page and changelog (developers.openai.c
 | `gpt-6-astra` | 2026-09-03 | 10.00 | 1.00 | 50.00 | published |
 | `gpt-6-sol` | 2026-09-22 | 2.00 | 0.20 | 10.00 | published |
 | `gpt-6-luna` | 2026-09-22 | 0.10 | 0.01 | 0.50 | published |
-| `gpt-6.1-sol` | 2026-09-29 | 2.00 | 0.10 | 10.00 | published, cache write 2.50 |
+| `gpt-6.1-sol` | 2026-09-29 | 2.00 | 0.10 | 10.00 | published, 30-minute cache write 2.50 (5.00 above 272,000 tokens) |
 
-Long-context prices (above 272,000 prompt tokens), the `fast` tier and the `flex` tier are in `Sources/UsageCore/Pricing/OpenAIPricing.swift`. The derived cards have no long-context tier. The changelog gives days, not hours, so a request within a day of a change can be priced by the neighbouring card. **Not priced:** `codex-auto-review` (not a published model; 291 requests, 6.55 M tokens on this Mac), a model name with a dated suffix such as `gpt-5.5-2026-04-24` (OpenAI prices some snapshots differently from their alias, so the exact name is the key), and any name not in the table. Coverage on this Mac's history: 6 of 7 observed model names priced, 98.7 % of OpenAI tokens, about US$186 API-equivalent in total.
+Long-context prices (above 272,000 prompt tokens), the `fast` tier and the `flex` tier are in `Sources/UsageCore/Pricing/OpenAIPricing.swift`. The derived cards have no long-context tier, and costs they produce are approximate. OpenAI publishes 30-minute and 12-hour cache-write prices; Codex has never reported a cache write and would not say which duration it used, so only GPT-6.1 Sol's 30-minute price is modelled and other cards would price a write at the input price. The changelog gives days, not hours, so a request within a day of a change can be priced by the neighbouring card. **Not priced:** `codex-auto-review` (not a published model; 291 requests, 6.55 M tokens on this Mac), a model name with a dated suffix such as `gpt-5.5-2026-04-24` (OpenAI prices some snapshots differently from their alias, so the exact name is the key), and any name not in the table. Coverage on this Mac's history (2026-10-20): 6 of 7 observed model names priced, 98.7 % of OpenAI tokens, about US$186 API-equivalent in total. That figure is an estimate of what the same tokens would cost on the pay-as-you-go API, not an amount charged to the ChatGPT subscription.
 
 ## Normalized work for capacity analysis
 

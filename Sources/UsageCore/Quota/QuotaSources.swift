@@ -172,8 +172,9 @@ public enum ClaudeQuota {
     }
 
     static func observation(window: (key: String, minutes: Int?), percent: Double, resetsAt: Date?, observedAt: Date,
-                            source: TelemetrySourceID, authority: QuotaAuthority, originSession: String?) -> QuotaObservation {
-        QuotaObservation(provider: .anthropic, account: .unassigned(.anthropic), poolKey: poolKey, windowKey: window.key,
+                            account: AccountRef = .unassigned(.anthropic), source: TelemetrySourceID,
+                            authority: QuotaAuthority, originSession: String?) -> QuotaObservation {
+        QuotaObservation(provider: .anthropic, account: account, poolKey: poolKey, windowKey: window.key,
                          windowMinutes: window.minutes, utilizationPercent: percent, resetsAt: resetsAt, observedAt: observedAt,
                          source: source, authority: authority,
                          originProduct: originSession == nil ? nil : .claudeCode, originSession: originSession)

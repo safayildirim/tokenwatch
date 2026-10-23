@@ -9,6 +9,10 @@ import Foundation
 ///
 /// Only the bytes the importer has already consumed are read, so a session file that is growing
 /// while the check runs does not produce false mismatches.
+///
+/// Claude Code deletes old transcripts on its own schedule (after 30 days by default), while the database keeps every
+/// request it has stored. A recount cannot read a file that no longer exists, so requests whose origin file is gone are
+/// left out of the comparison and reported separately as retained history. They are counted, never hidden.
 public struct SourceVerifier: Sendable {
     public struct Mismatch: Sendable, Equatable {
         public var sessionID: String
@@ -26,6 +30,10 @@ public struct SourceVerifier: Sendable {
         public var databaseTotals = TokenCounts()
         public var mismatches: [Mismatch] = []
         public var naiveSumOfAllLines = TokenCounts()
+        /// These are the stored requests whose session file has since been deleted, so they cannot be recounted.
+        public var retainedFiles = 0
+        public var retainedRequests = 0
+        public var retainedTotals = TokenCounts()
         public var isConsistent: Bool { mismatches.isEmpty && requestsInSource == requestsInDatabase }
     }
 
@@ -102,17 +110,33 @@ public struct SourceVerifier: Sendable {
         }
         report.requestsInSource = best.count
 
+        // The database side is grouped by session and by origin file, so that the requests of a deleted file can be set
+        // aside while the requests of the same session from files that still exist are compared as usual.
         let perSessionDB: [String: TokenCounts] = try db.read { c in
             var out: [String: TokenCounts] = [:]
             let rows = try c.query("""
-                SELECT s.external_id, sum(COALESCE(r.uncached_input_tokens, 0)), sum(r.output_tokens),
+                SELECT s.external_id, f.path, sum(COALESCE(r.uncached_input_tokens, 0)), sum(r.output_tokens),
                        sum(COALESCE(r.cache_read_tokens, 0)), sum(COALESCE(r.cache_creation_tokens, 0)), count(*)
                 FROM model_request r JOIN session s ON s.id = r.session_id
-                WHERE r.product_id = ? GROUP BY s.id
+                LEFT JOIN source_file f ON f.id = r.origin_file_id
+                WHERE r.product_id = ? GROUP BY s.id, r.origin_file_id
                 """, [.text(ProductID.claudeCode.rawValue)]) { row in
-                (row.text(0), TokenCounts(uncachedInput: row.int(1), output: row.int(2), cacheRead: row.int(3), cacheCreation: row.int(4)), Int(row.int(5)))
+                (row.text(0), row.textOrNil(1),
+                 TokenCounts(uncachedInput: row.int(2), output: row.int(3), cacheRead: row.int(4), cacheCreation: row.int(5)), Int(row.int(6)))
             }
-            for (id, t, n) in rows { out[id] = t; report.requestsInDatabase += n }
+            var retainedPaths: Set<String> = []
+            for (id, path, t, n) in rows {
+                // A request without a recorded origin is always compared, so a missing link can never excuse a mismatch.
+                if let path, !FileManager.default.fileExists(atPath: path) {
+                    retainedPaths.insert(path)
+                    report.retainedRequests += n
+                    report.retainedTotals += t
+                    continue
+                }
+                out[id, default: TokenCounts()] += t
+                report.requestsInDatabase += n
+            }
+            report.retainedFiles = retainedPaths.count
             return out
         }
         report.databaseTotals = perSessionDB.values.reduce(TokenCounts()) { $0 + $1 }

@@ -104,6 +104,19 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(ModelCatalog.describe("claude-fable-5-1").family, "fable")
         XCTAssertEqual(ModelCatalog.describe("mystery-model").family, "other")
     }
+
+    /// Anthropic prices cache hits on Opus 5.5 and Sonnet 5.5 at 0.05x the base input price, not the usual 0.1x
+    /// (platform.claude.com pricing page, footnote 2, read 2026-10-23). Sonnet 5.5 was once carried at 0.1x, which
+    /// overstated the estimate for every cached read.
+    func testCacheHitsOnTheFiveFiveModelsUseTheReducedMultiplier() throws {
+        func cacheRead(_ model: String) throws -> Int64 {
+            try XCTUnwrap(PricingCatalog.builtin.first { $0.provider == .anthropic && $0.modelKey == model && $0.speed == "standard" })
+                .cacheReadMicrosPerMTok
+        }
+        XCTAssertEqual(try cacheRead("claude-sonnet-5-5"), 100_000)
+        XCTAssertEqual(try cacheRead("claude-opus-5-5"), 200_000)
+        XCTAssertEqual(try cacheRead("claude-sonnet-5"), 200_000, "Sonnet 5 keeps the standard 0.1x multiplier")
+    }
 }
 
 /// End-to-end token accounting through the real importer and database.

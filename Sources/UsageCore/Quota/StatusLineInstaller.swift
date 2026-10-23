@@ -193,7 +193,7 @@ public enum StatusLineInstaller {
         if let existing {
             guard (try? JSONSerialization.jsonObject(with: existing)) is [String: Any] else { throw InstallError.settingsNotValidJSON }
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-            let b = settingsURL.deletingLastPathComponent().appendingPathComponent("settings.json.usage-monitor-backup-\(stamp)")
+            let b = settingsURL.deletingLastPathComponent().appendingPathComponent("settings.json.tokenwatch-backup-\(stamp)")
             do { try existing.write(to: b); backup = b } catch { throw InstallError.writeFailed("\(error)") }
         }
 

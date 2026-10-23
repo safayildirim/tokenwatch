@@ -185,4 +185,29 @@ final class SourceVerifierTests: XCTestCase {
         XCTAssertEqual(report.mismatches.first?.database, 51)
         XCTAssertEqual(report.mismatches.first?.source, 50)
     }
+
+    /// Claude Code deletes old transcripts, and the database keeps their requests. Those requests cannot be recounted,
+    /// so they must be reported as retained history rather than as a mismatch, while the files that remain, including
+    /// other files of the same session, are still compared exactly.
+    func testRequestsOfADeletedTranscriptAreReportedAsRetainedNotAsAMismatch() throws {
+        let env = try TestEnv()
+        let kept = try env.mainFile(session: "S1")
+        let deleted = try env.subagentFile(session: "S1", agent: "A")
+        try Fixture.write([Fixture.assistant(id: "m1", session: "S1", at: t0, output: 50)], to: kept)
+        try Fixture.write([Fixture.assistant(id: "s1", session: "S1", at: t0 + 10, output: 7, cacheRead: 300, agent: "A")], to: deleted)
+        try env.syncAll()
+        try FileManager.default.removeItem(at: deleted)
+
+        let report = try SourceVerifier(db: env.db, adapter: env.adapter).verify()
+        XCTAssertTrue(report.isConsistent, "\(report.mismatches)")
+        XCTAssertEqual(report.requestsInDatabase, 1)
+        XCTAssertEqual(report.retainedFiles, 1)
+        XCTAssertEqual(report.retainedRequests, 1)
+        XCTAssertEqual(report.retainedTotals.output, 7)
+        XCTAssertEqual(report.retainedTotals.cacheRead, 300)
+
+        // Tampering with a request whose file still exists is still caught.
+        try env.db.write { try $0.run("UPDATE model_request SET output_tokens = 51 WHERE output_tokens = 50") }
+        XCTAssertFalse(try SourceVerifier(db: env.db, adapter: env.adapter).verify().isConsistent)
+    }
 }

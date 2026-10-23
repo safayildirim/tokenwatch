@@ -86,7 +86,7 @@ The cache is opened `O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK`, and must b
 
 The parser walks the JSON and materializes only `cachedUsageUtilization`. It does not inspect, retain, log or transmit credentials, cookies, project paths, settings or conversation data, and it never writes to the file. No network request is made, no OAuth token is refreshed, and no credential store is opened.
 
-The account identifier is reduced to a short one-way hash used only to notice that the signed-in account changed. The raw identifier is not stored or displayed. The hash is not used to split Claude into multiple pools, because the status line names no account and doing so would create duplicate pools for one subscription.
+The account identifier is reduced to a short one-way hash. The raw identifier is not stored or displayed. The hash identifies the account that owns the cache's readings, so cache readings are stored in that account's pool (shown as, for example, "Account 1a2b3c"), and a change of the hash is reported as an account change.
 
 ### Atomic replacement and missed writes
 
@@ -136,13 +136,17 @@ For each window, the evaluator:
 
 When two sources describe the same cycle within 15 minutes and differ by at least one percentage point, the difference is surfaced as a disagreement: the selected reading is shown and the alternatives are named, with their source and time. They are never averaged. A cache fetched twenty minutes before a status-line reading normally has a lower percentage because usage has grown; that is not labelled a conflict.
 
+These rules apply to the sources that report into the same pool. Cache readings belong to the hashed account and status-line readings to the unassigned pool (see [Account changes](#account-changes)), so the cache and the status line are no longer compared with each other: each pool shows its own newest reading.
+
 A missing reading is not zero. A window whose reset time has passed is **elapsed and unknown** until a source reports the new window. A malformed window is skipped individually; it is not converted into 0%.
 
 ### Account changes
 
-The cache contains an account identifier; the status line contains none. Tokenwatch hashes the cache identifier and notices when it changes. It warns that the account changed and shows the newest observation. It does not average the two accounts, combine their cycles, or claim that a status-line reading belongs to a particular account.
+The cache contains an account identifier; the status line contains none. Tokenwatch hashes the cache identifier and stores each cache reading in the pool of that account. When the hash changes, the app warns that the account changed, and the readings of the new account start a pool of their own. The history of the earlier account stays in its own pool and is never averaged with, overwritten by, or merged into the new one.
 
-Claude readings therefore remain in the explicit **unassigned** Anthropic pool. This is intentionally conservative: a hash from the cache is not enough to attribute status-line files, and splitting only the cache would create duplicate pools for one subscription. The consequence is a real limitation, not a hidden one: history from before an account switch is not separated from history after it.
+Status-line readings name no account, so they stay in the explicit **unassigned** Anthropic pool. They are never matched to the cache's account by timestamp, reset time or percentage, because that would be a guess. The consequence is a stated limitation: when the optional status line is installed, one subscription appears twice, once as the identified account (from the cache) and once as *unassigned* (from the status line). The two pools are evaluated, displayed and alerted on independently, so a threshold that both sources see can be announced twice. The menu bar shows whichever pool reported most recently.
+
+Cache readings stored by versions before this change sit in the unassigned pool. They are kept as history and are not moved, and they become stale like any other reading.
 
 ## Display model and freshness
 
@@ -205,7 +209,7 @@ Consequences, each covered by a test:
 * A reading dated more than five minutes in the future (a clock that was wrong when it was written) is not recorded. A reading dated more than five minutes later than the current time (the clock was moved back) is shown as stale instead of new.
 * A cycle changes only when the reset time moves by more than 30 seconds. A new cycle does not inherit the previous one's higher value, and a window whose reset time has passed is **unknown, never zero**, until the provider reports it again.
 * A window with no current value shows a dash in the menu bar in its own place, never the other window's figure.
-* Different named pools and different named accounts are different rows and are never merged. Claude readings without an identity share the explicit unassigned pool; readings of one account from two sessions that run at once are combined by the in-cycle rule above.
+* Different named pools and different named accounts are different rows and are never merged. Cache readings belong to the hashed account; status-line readings, which carry no identity, share the explicit unassigned pool; readings of one account from two sessions that run at once are combined by the in-cycle rule above.
 
 The cache's `fetchedAtMs` is the only observation time used. The file's modification time, the app's start time, and the time the app read the file are not substitutes.
 
@@ -250,7 +254,7 @@ Quota history says what the provider reported. Capacity analysis compares **how 
 * Only **authoritative** snapshots become capacity intervals. Cache readings are authoritative provider observations; status-line readings are authoritative; the unverified Desktop hint never is.
 * The five-hour (`300m`) and weekly (`10080m`) windows are analyzed independently. A cycle is never merged across a reset, and a lower reading inside one cycle is skipped, never treated as a new cycle.
 * Local work is normalized by API-equivalent list cost, not by tokens and not by the provider's undocumented metering. The provider percentage remains the only quota quantity.
-* A plan period is a half-open manual (or provider-reported) annotation. All Claude readings remain in the unassigned account; the app never claims a verified account identity from timing, reset times, or the cache hash for status-line readings.
+* A plan period is a half-open manual (or provider-reported) annotation. Cache readings belong to the hashed account that the cache names, and status-line readings belong to the unassigned account. The app never attributes a status-line reading to an account from timing, reset times, or the cache hash, so a plan period applies to the account it was recorded for.
 * A ratio is published only when at least two independent cycles per plan and two matched pairs are available, or a comparable pooled fallback exists. Otherwise the result is **unknown**, not a number derived from advertised multipliers.
 * The advertised five-hour multipliers (Pro 1×, Max 5x 5×, Max 20x 20×) are shown as references only. Weekly multipliers are not advertised and are not invented.
 
@@ -259,10 +263,10 @@ The method, evidence levels, matching rules, purchasing arithmetic and limitatio
 ## Known limitations
 
 * **The cache schema is provider-written and undocumented.** It can change without notice. The adapter validates known shapes, skips unknown fields and malformed windows, and reports why a snapshot was not used; it cannot promise that a future Claude Code version will keep the same keys.
-* **Cache refresh timing is not verified.** The snapshot is refreshed when Claude Code fetches usage, which appears to happen when `/usage` is opened, but the relationship is not documented and was not verified interactively. A reading may be hours old even though `.claude.json` was written seconds ago.
+* **Cache refresh timing is undocumented.** The snapshot is refreshed when Claude Code fetches usage. On 2026-10-23, during an active Claude Code session, `fetchedAtMs` advanced four times within half an hour (06:42, 06:50, 06:51 and 07:03 local time), but whether `/usage` was opened in another terminal was not controlled, and the trigger is not documented. A reading may be hours old even though `.claude.json` was written seconds ago, and the app judges freshness only by `fetchedAtMs`.
 * **No live `/usage` comparison was performed.** `/usage` is an interactive terminal screen and no supported non-interactive structured interface was found. The cache was validated read-only against the installed Claude Code, but the app does not claim that its display was compared side by side with `/usage`.
 * **The cache does not report a subscription tier**, and the observed scoped `Fable` entry had a null model id. The app names the scope from the provider's label or id, but it cannot map a scoped window to a guaranteed model identity or plan.
-* **One account is assumed for display.** The cache provides an account hash for change detection; the status line provides no identity. Claude readings remain in one explicit unassigned pool. An account switch is warned about, and values are never averaged, but old history cannot be moved to a separately verified pool.
+* **The status line has no account identity.** Cache readings are stored per hashed account, but status-line readings stay unassigned. With the status line installed, one subscription is shown as two pools, and a threshold can be announced once for each. Cache history recorded before account attribution existed stays in the unassigned pool.
 * **Status-line quota is terminal-only and subscriber-only.** The VS Code extension and Claude Desktop's Code tab do not run the status line. API-key users have no subscription windows. The local cache is read independently, so the status line is not required.
 * **No history before Tokenwatch first reads a source.** Nothing reports past utilization to the app. Stored cache history begins at Tokenwatch's first usable read; status-line history begins when the helper is installed.
 * **No per-session quota attribution.** The session pages show three separate quantities and never merge them: (1) the session's actual tokens, (2) its share of locally observed activity in each quota window, and (3) the account-level percentage Claude reported, with its peak in that window. Quota consumed on surfaces the app cannot observe is never attributed to local sessions.

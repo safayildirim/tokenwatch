@@ -220,6 +220,7 @@
 "Recounting every token from the original files…" = "Her token özgün dosyalardan yeniden sayılıyor…";
 "Claude Code: %lld sessions and %@ requests recounted independently match the database exactly. (Adding up every log line instead would have overstated cache reads by %@×.)" = "Claude Code: bağımsız olarak yeniden sayılan %lld oturum ve %@ istek veritabanıyla tam olarak eşleşiyor. (Bunun yerine her günlük satırını toplamak, önbellek okumalarını %@× fazla gösterirdi.)";
 "Claude Code: mismatch in %lld places. Use \"Rebuild from source\" to repair, and please report it." = "Claude Code: %lld yerde uyuşmazlık var. Onarmak için \"Kaynaktan Yeniden Oluştur\" seçeneğini kullanın ve lütfen bunu bildirin.";
+"Claude Code: %@ stored requests come from %lld transcripts that Claude Code has since deleted. They are kept as history and cannot be recounted." = "Claude Code: saklanan %@ istek, Claude Code'un o zamandan beri sildiği %lld döküm dosyasından geliyor. Bunlar geçmiş olarak tutulur ve yeniden sayılamaz.";
 "Claude Code: verification failed: %@" = "Claude Code: doğrulama başarısız: %@";
 "Codex: %lld sessions (%lld by usage record, %lld by event, %lld fork) recounted independently match the database exactly." = "Codex: bağımsız olarak yeniden sayılan %lld oturum (%lld kullanım kaydıyla, %lld olayla, %lld çatallama) veritabanıyla tam olarak eşleşiyor.";
 "Codex: mismatch in %lld sessions. Use \"Rebuild from source\" to repair, and please report it." = "Codex: %lld oturumda uyuşmazlık var. Onarmak için \"Kaynaktan Yeniden Oluştur\" seçeneğini kullanın ve lütfen bunu bildirin.";
@@ -261,7 +262,7 @@
 "%@ usage is unpriced" = "%@ kullanımı fiyatlandırılmamış";
 "No rate card is installed for %@'s models, and a price is never guessed. Add the published prices for your models under Settings → Pricing and the estimate fills in for past and future usage." = "%@ modelleri için yüklü bir fiyat listesi yok ve fiyat asla tahmin edilmez. Modellerinizin yayımlanmış fiyatlarını Ayarlar → Fiyatlandırma bölümüne ekleyin; tahmin geçmiş ve gelecek kullanım için doldurulur.";
 "Where the prices come from" = "Fiyatlar nereden geliyor";
-"%@ tokens date from before a price cut. The provider announced the cut as a percentage, so the earlier price is worked out from the published price after it and was not itself published." = "%@ token bir fiyat indiriminden öncesine ait. Sağlayıcı indirimi yüzde olarak duyurduğu için önceki fiyat, sonraki yayımlanmış fiyattan hesaplanmıştır ve kendisi yayımlanmamıştır.";
+"%@ tokens date from before a price cut. The provider announced the cut as a percentage, so the earlier price is worked out from the published price after it and was not itself published. Costs for that period are approximate." = "%@ token bir fiyat indiriminden öncesine ait. Sağlayıcı indirimi yüzde olarak duyurduğu için önceki fiyat, sonraki yayımlanmış fiyattan hesaplanmıştır ve kendisi yayımlanmamıştır. Bu döneme ait maliyetler yaklaşıktır.";
 "%@ tokens are priced with prices that you entered." = "%@ token, sizin girdiğiniz fiyatlarla fiyatlandırıldı.";
 "Cost per day" = "Günlük maliyet";
 "Estimated, by provider. Days with unpriced usage are lower bounds." = "Sağlayıcıya göre tahmini. Fiyatlandırılmamış kullanım içeren günler alt sınırdır.";

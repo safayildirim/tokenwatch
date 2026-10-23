@@ -1,6 +1,6 @@
 # Validation and test results
 
-## 1. Automated tests: 402 tests (338 core executed, 64 UI compiled)
+## 1. Automated tests: 405 tests (`make test`, 2026-10-23: 0 failures, 1 skipped)
 
 `swift test --skip UsageUITests` runs **338 core tests in about 37 seconds, with 0 failures and 1 skipped** (the opt-in real-installation check). The UI target compiles all 64 `UsageUITests`; the full UI suite was not rerun for this change. Fixtures use the real transcript format with every piece of conversation text replaced by a placeholder.
 
@@ -166,3 +166,37 @@ Done with the real installed app, driven through the macOS accessibility interfa
 * **Light and dark appearance of the real window, and real screenshots.** The theme setting works, but without permission to capture the screen the appearance could not be looked at. The README images are rendered by the app's own offscreen renderer from synthetic demo data. Offscreen rendering draws the sidebar of the dashboard as an empty panel; the real window shows it.
 * **Empty, loading and error states in the real window.** Covered by the state tests and the offscreen renders only.
 * **A multi-day soak.** The accelerated run is not one.
+
+## 5. Manual acceptance procedure
+
+These checks need a person at the Mac, because they log out, sleep, restart or change macOS privacy settings. Each step names what success looks like. The terminal commands only read; none of them changes the database.
+
+Useful read-only commands:
+
+```sh
+pgrep -lx Tokenwatch                                                          # Which copies are running.
+"/Applications/Tokenwatch.app/Contents/MacOS/Tokenwatch" --login-item status  # Whether macOS starts it at login.
+sqlite3 -readonly ~/Library/Application\ Support/Tokenwatch/usage.sqlite "select count(*) from model_request"
+sqlite3 -readonly ~/Library/Application\ Support/Tokenwatch/usage.sqlite "PRAGMA integrity_check"
+```
+
+1. **Notifications.** Open System Settings → Notifications → Tokenwatch and turn on *Allow notifications*. In Tokenwatch, open Settings → Notifications, turn notifications on, and press *Send a test notification*. Success: a banner titled "Tokenwatch" saying "This is a test. Notifications are working." appears, and the settings page shows the permission as allowed. Then turn *Allow notifications* off in System Settings and press the test button again. Success: no banner, and the page says that notifications are turned off for the app instead of failing silently. Turn it back on, quit and reopen Tokenwatch, and check that your notification settings are unchanged.
+2. **Log out and back in.** Note the request count, then log out and log in. Success: Tokenwatch's menu bar item appears without opening anything, `pgrep -lx Tokenwatch` lists exactly one process, and the request count has not gone down. Within a minute of using Claude Code, the count goes up while no Tokenwatch window is open.
+3. **Second copy.** Open `/Applications/Tokenwatch.app` again from Finder. Success: the running copy comes forward and `pgrep` still lists one process.
+4. **Sleep and wake.** Put the Mac to sleep for at least five minutes while a Claude Code or Codex session is idle, then wake it and send one message. Success: the new request appears in the dashboard without restarting the app, and quota readings older than their freshness limit are marked stale rather than current.
+5. **Restart the Mac.** Note the request count and run the integrity check, then restart. Success after login: one Tokenwatch process, the request count equal or higher, `PRAGMA integrity_check` prints `ok`, and Diagnostics shows every source as synchronized.
+6. **Quota freshness across the restart.** Success: the menu bar figures after the restart are the same readings as before, with their original "updated … ago" times, never shown as newer than they are.
+
+## 6. Final acceptance checks (2026-10-23)
+
+These were run against the installed app and the real data on this Mac. Recounts ran against a snapshot copy of the database, so the real database was only read.
+
+* **Independent recounts.** Claude: 90,737 requests, with uncached input, output, cache reads and cache writes matching exactly. A further 1,122 stored requests come from 16 transcripts that Claude Code has since deleted (its 30-day cleanup). They are reported as retained history, and their totals equal the earlier difference between the database and the files exactly. Before this release `tw verify` and the Diagnostics page reported them as a mismatch and suggested *Rebuild from source*, which would have discarded that history. OpenAI: input, cached, output and reasoning tokens match exactly across 241 sessions.
+* **Database.** `PRAGMA integrity_check` is `ok`, there are no foreign-key violations and no duplicate request keys. Request, session and quota counts and the output-token sum were identical before and after a clean quit, and grew only by new requests after the relaunch.
+* **Claude quota, live.** Each new snapshot in `~/.claude.json` was stored with its own `fetchedAtMs` as the observation time, with the same percentages and reset times, and shown in the menu bar (`C 3%`, then `C 4%`). A snapshot whose numbers had not changed only extended `last_confirmed_at`. Readings are stored in the hashed account's pool; the earlier unassigned cache history is kept and is shown as older readings. The status line helper was not installed, at the user's choice.
+* **OpenAI quota.** The latest weekly reading (42 %) is shown as stale after 13 hours, and the five-hour window, whose reset time has passed, is shown as unavailable and as a dash in the menu bar, never as 0 %.
+* **Single instance and login item.** A second copy started by hand exited at once, leaving one process. After the app was replaced, `--login-item status` still reported *Enabled*.
+* **Idle cost.** Menu bar only, after a fresh start: 79.5 MB resident and 0.05 % CPU over two minutes, within the earlier baseline. With the dashboard open beside a streaming Claude Code session, the app used 12 to 16 % CPU, which is the bounded heavy-reload behaviour described in `AppModel`; after the window was closed it fell to 0.28 %.
+* **Prices.** The Anthropic and OpenAI cards were compared with the providers' pricing pages. Sonnet 5.5's cache-hit price was corrected from 0.20 to 0.10 US$ per million tokens (0.05× input), which lowered the estimate for this Mac's history by US$982.44. The estimate is now within 4.1 % of Claude Code's own recorded session costs.
+
+Not performed: notification delivery, logging out, sleep and wake, and a reboot, which are in section 5; the live status-line payload; screenshots and the appearance of the real window, because screen capture is not available to the tooling.

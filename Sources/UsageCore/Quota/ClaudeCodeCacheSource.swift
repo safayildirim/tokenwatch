@@ -94,7 +94,9 @@ public enum ClaudeCodeCacheSource {
                   fetchedAt.timeIntervalSince(now) <= QuotaStaleness.futureSkew else {
                 return failure(.invalidTimestamp)
             }
-            guard let account = raw.accountUuid, let accountHash = accountFingerprint(account) else {
+            guard let rawAccount = raw.accountUuid,
+                  let account = accountReference(rawAccount),
+                  let accountHash = account.hash else {
                 return failure(.invalidAccount)
             }
             guard let utilization = raw.utilization else { return failure(.noUsageData) }
@@ -119,7 +121,7 @@ public enum ClaudeCodeCacheSource {
                     guard window.resetInvalid == false else { skipped += 1; return }
                     observations.append(ClaudeQuota.observation(
                         window: mapped, percent: value, resetsAt: window.reset, observedAt: fetchedAt,
-                        source: .claudeCodeCache, authority: .authoritative, originSession: nil))
+                        account: account, source: .claudeCodeCache, authority: .authoritative, originSession: nil))
                 case .invalid:
                     skipped += 1
                 case .missing:
@@ -161,7 +163,7 @@ public enum ClaudeCodeCacheSource {
                 usedScopedLabels.insert(label.lowercased())
                 observations.append(ClaudeQuota.observation(
                     window: (key, 10080), percent: percent, resetsAt: window.reset, observedAt: fetchedAt,
-                    source: .claudeCodeCache, authority: .authoritative, originSession: nil))
+                    account: account, source: .claudeCodeCache, authority: .authoritative, originSession: nil))
             }
             // Older caches used these two flat fields. They are accepted only for models that the structured list did
             // not already describe, so a cache that has both shapes never produces a duplicate window.
@@ -178,7 +180,7 @@ public enum ClaudeCodeCacheSource {
                 usedScopedLabels.insert(label.lowercased())
                 observations.append(ClaudeQuota.observation(
                     window: (key, 10080), percent: percent, resetsAt: window.reset, observedAt: fetchedAt,
-                    source: .claudeCodeCache, authority: .authoritative, originSession: nil))
+                    account: account, source: .claudeCodeCache, authority: .authoritative, originSession: nil))
             }
 
             // Keep the ordering deterministic: the shared windows first, then scoped windows by key.
@@ -196,12 +198,19 @@ public enum ClaudeCodeCacheSource {
         }
     }
 
-    /// The stable, non-reversible reference used only to notice that the signed-in account changed. The readings
-    /// themselves stay in the explicit unassigned pool, because the optional status line carries no account identity.
+    /// The stable, non-reversible account reference for a cache snapshot. Cache observations use it, so two accounts
+    /// never share a quota pool. The optional status line carries no account identity and remains unassigned; matching
+    /// its readings to this account by timestamp or percentage would be a guess.
+    ///
     /// Only the short hash leaves the parser; the UUID is not stored anywhere.
-    public static func accountFingerprint(_ raw: String) -> String? {
+    public static func accountReference(_ raw: String) -> AccountRef? {
         guard uuidIsWellFormed(raw) else { return nil }
-        return AccountRef.identified(provider: .anthropic, rawIdentifier: raw.lowercased()).hash
+        return .identified(provider: .anthropic, rawIdentifier: raw.lowercased())
+    }
+
+    /// The one-way account fingerprint used only to notice that the signed-in account changed.
+    public static func accountFingerprint(_ raw: String) -> String? {
+        accountReference(raw)?.hash
     }
 
     private static func uuidIsWellFormed(_ value: String) -> Bool {
